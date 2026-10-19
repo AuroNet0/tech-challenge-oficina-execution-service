@@ -1,4 +1,7 @@
 spring:
+  data:
+    mongodb:
+      auto-index-creation: true
   application:
     name: tech-challenge-oficina-execution-service
   mongodb:
