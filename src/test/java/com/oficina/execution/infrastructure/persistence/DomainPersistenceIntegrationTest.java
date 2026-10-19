@@ -108,7 +108,7 @@ class DomainPersistenceIntegrationTest {
     void preservesFailureAndCancellationStates() {
         var failed = diagnostics.save(Diagnostic.create(UUID.randomUUID(), UUID.randomUUID()).start().fail("falha"));
         assertThat(diagnostics.findById(failed.id())).contains(failed);
-        var cancelled = diagnostics.save(failed.cancel());
+        var cancelled = diagnostics.save(Diagnostic.create(UUID.randomUUID(), UUID.randomUUID()).cancel());
         assertThat(diagnostics.findById(cancelled.id())).contains(cancelled);
         var repair = repairs.save(Repair.create(UUID.randomUUID(), UUID.randomUUID(), failed.id()).authorizeAndStart().fail("falha fisica"));
         assertThat(repairs.findById(repair.id())).contains(repair);
@@ -200,4 +200,3 @@ class DomainPersistenceIntegrationTest {
         assertThat(history.findByOsIdOrderByCreatedAt(osId)).isEmpty();
     }
 }
-

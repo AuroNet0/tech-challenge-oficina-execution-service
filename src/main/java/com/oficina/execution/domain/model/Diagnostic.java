@@ -73,7 +73,7 @@ public record Diagnostic(UUID id, UUID osId, UUID sagaId, DiagnosticStatus statu
     }
 
     public Diagnostic cancel() {
-        if (status == DiagnosticStatus.COMPLETED || status == DiagnosticStatus.CANCELLED)
+        if (status != DiagnosticStatus.PENDING && status != DiagnosticStatus.IN_PROGRESS)
             throw new DomainException("Diagnostic cannot be cancelled");
         return change(DiagnosticStatus.CANCELLED, observacoes, items);
     }

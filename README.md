@@ -1,18 +1,18 @@
 # tech-challenge-oficina-execution-service
 
-Microsservico Execution Service do Tech Challenge FIAP - Fase 4, etapa 6.2.
+Microsservico Execution Service do Tech Challenge FIAP - Fase 4, etapa 6.3.
 
 ## Objetivo
 
 O Execution Service implementa o dominio de diagnostico tecnico e execucao dos reparos de uma ordem de servico, com persistencia propria MongoDB. O bootstrap de Spring Boot, seguranca inicial, OpenAPI, health checks e Docker permanece preservado.
 
-Nao ha endpoints de negocio, RabbitMQ, Saga, Inbox, Outbox, JWT definitivo ou integracao com outros servicos nesta etapa. Nenhum evento e publicado.
+A API REST permite consultar e atualizar tecnicamente diagnosticos e reparos existentes. Nao ha RabbitMQ, Saga, Inbox, Outbox, JWT definitivo ou integracao com outros servicos nesta etapa. Nenhum evento e publicado: conclusoes sao persistidas somente localmente.
 
 ## Responsabilidades futuras
 
 - Consumir comandos do OS Service, como `diagnostic.start.v1`, `repair.start.v1` e `repair.cancel.v1`.
 - Publicar eventos para a saga orquestrada pelo OS Service, como `diagnostic.started.v1`, `diagnostic.completed.v1`, `repair.started.v1`, `repair.completed.v1` e eventos de falha.
-- Persistir dados proprios de diagnostico e reparo exclusivamente no MongoDB do Execution Service.
+- Integrar os estados tecnicos ja persistidos no MongoDB com comandos e eventos.
 - Participar da arquitetura de microsservicos sem consultar diretamente bancos do OS Service ou Billing Service.
 
 Os contratos futuros devem seguir a referencia do OS Service em `docs/events.md` e `docs/saga.md`.
@@ -57,7 +57,7 @@ src/main/java/com/oficina/execution/
     └── observability/
 ```
 
-O dominio possui os modelos imutaveis `Diagnostic`, `DiagnosticItem`, `Repair` e `ExecutionHistory`, enums e `DomainException`, sem dependencia de Spring ou MongoDB. `application/port/out` define tres portas de repositorio. `infrastructure/persistence` separa `document`, `repository`, `adapter` e `mapper`.
+O dominio possui os modelos imutaveis `Diagnostic`, `DiagnosticItem`, `Repair` e `ExecutionHistory`, enums e `DomainException`, sem dependencia de Spring ou MongoDB. `application/port/in` define as operacoes dos casos de uso; `application/usecase` implementa consultas e alteracoes transacionais; `application/port/out` define tres portas de repositorio. `infrastructure/persistence` separa `document`, `repository`, `adapter` e `mapper`. Controllers finos, requests validados, responses e tratamento HTTP estao em `infrastructure/web`; documentos MongoDB nao sao expostos.
 
 ## Configuracao MongoDB
 
@@ -90,7 +90,7 @@ No Windows PowerShell:
 
 ## Docker Compose
 
-O Compose sobe MongoDB com autenticacao, volume persistente e a aplicacao. A aplicacao fica exposta em `8081` para coexistir com o OS Service na porta `8080`.
+O Compose sobe MongoDB autenticado em replica set de um membro (rs0), volume persistente e a aplicacao. A aplicacao fica exposta em `8081` para coexistir com o OS Service na porta `8080`.
 
 ```bash
 docker compose up --build -d
@@ -148,7 +148,7 @@ A cobertura minima configurada e de 80% por linhas de codigo. A unica exclusao e
 
 ## Dominio e estados
 
-- Diagnostic nasce PENDING; start permite PENDING -> IN_PROGRESS; complete e fail permitem IN_PROGRESS -> COMPLETED ou FAILED. Cancelamento e permitido em PENDING, IN_PROGRESS ou FAILED, antes da conclusao. COMPLETED e CANCELLED nao aceitam edicao. FAILED so admite cancelamento.
+- Diagnostic nasce PENDING; start permite PENDING -> IN_PROGRESS; complete e fail permitem IN_PROGRESS -> COMPLETED ou FAILED. Cancelamento e permitido somente em PENDING ou IN_PROGRESS. FAILED preserva a falha e a justificativa, sem conversao implicita para CANCELLED. COMPLETED, CANCELLED e FAILED nao aceitam edicao.
 - Diagnostico concluido exige pelo menos um item valido. Itens so podem ser adicionados durante IN_PROGRESS; itemId deve ser unico apos strip. Quantidade deve ser positiva e precoPrevisto nao negativo. Descricao e identificador nao podem estar vazios. Nao ha calculo de orcamento.
 - Repair nasce PENDING. authorizeAndStart representa explicitamente a autorizacao futura recebida por repair.start.v1: PENDING -> IN_PROGRESS. Nao existe setter generico de status nem operacao start sem autorizacao. complete e fail exigem IN_PROGRESS.
 - cancel confirma cancelamento apenas em PENDING. cancellationOutcome distingue CANCELLATION_ALLOWED (PENDING), CONFIRMED (CANCELLED), MANUAL_INTERVENTION_REQUIRED (IN_PROGRESS ou FAILED) e COMPENSATION_FAILED (COMPLETED), sem alterar o estado fisico. COMPLETED e CANCELLED sao terminais. A confirmacao de compensacao de trabalho iniciado depende de politica e evidencias futuras; nao e simulada nesta etapa.
@@ -180,12 +180,104 @@ Os nomes itemId, descricao, tipo, quantidade, unidadePreco e precoPrevisto corre
 
 O futuro mapper de mensagens devera igualmente emitir quantidade e precoPrevisto como strings decimais (nao serializar o BigDecimal diretamente como numero), preservar osId, sagaId e correlationId e montar o envelope documentado pelo OS Service. Os documentos MongoDB nao sao envelopes RabbitMQ. Falhas e cancelamentos seguem a distincao da saga entre repair.failed.v1, repair.cancelled.v1 e repair.cancellation-failed.v1; nenhuma dessas mensagens e produzida nesta etapa.
 
-## Atomicidade futura e limites
+## Atomicidade e limites
 
-O futuro consumidor devera gravar estado tecnico, historico, Inbox e Outbox na mesma transacao MongoDB, configurando MongoTransactionManager e replica set. A publicacao RabbitMQ devera ocorrer posteriormente pela Outbox. Nao assumir atomicidade entre colecoes com saves independentes.
+MongoTransactionManager esta configurado. Os casos de uso de escrita usam @Transactional: alteracao de Diagnostic ou Repair e insercao de ExecutionHistory confirmam ou revertem juntos. Falhas de historico nao deixam o estado tecnico atualizado. Versoes obsoletas e conflitos de escrita de transacoes retornam HTTP 409, sem retry automatico. O cliente deve consultar novamente antes de decidir como reaplicar sua alteracao.
+
+O futuro consumidor devera incluir Inbox e Outbox na mesma transacao do estado tecnico e historico. A publicacao RabbitMQ devera ocorrer posteriormente pela Outbox. O historico tecnico nao coordena a Saga.
 
 Testcontainers usa MongoDB 8 em replica set e valida rollback real entre diagnostics e execution_history, alem de persistencia, precisao decimal, reconstrucao, indices, ordenacao, unicidade e concorrencia otimista. Os testes de bootstrap permanecem preservados.
 
-O Compose de desenvolvimento preserva o MongoDB autenticado standalone do bootstrap: suporta esta etapa, mas devera ser configurado com replica set antes de implementar transacoes no processamento de mensagens. Nao ha transacao de aplicacao ou consumidor habilitado atualmente.
+O script docker/mongo-entrypoint.sh gera uma chave interna em /data/db/.replica-keyfile somente quando ausente, com permissao 400 e proprietario mongodb. O healthcheck autentica, inicia rs0 somente se ainda nao inicializado e aguarda isWritablePrimary antes de liberar a aplicacao. Reutiliza o volume anterior sem apagar os dados. As credenciais de volumes existentes devem continuar correspondendo as variaveis configuradas.
 
-Nao foram implementados casos de uso de integracao, controllers de negocio, mensageria, Inbox/Outbox, saga, Billing, pagamentos, JWT definitivo, infraestrutura cloud ou alteracao de status da OS. Nao ha dados ficticios permanentes.
+O membro anuncia mongodb:27017. A URI usa replicaSet=rs0 e directConnection=true para funcionar tanto no Compose quanto com a aplicacao executada no host via porta publicada. Esse replica set de um membro e destinado ao desenvolvimento, sem alta disponibilidade. Arquivos shell sao versionados com LF para funcionar tambem em checkouts Windows.
+
+Nao foram implementados consumidores, mensageria, Inbox/Outbox, saga, Billing, pagamentos, JWT definitivo, infraestrutura cloud ou alteracao de status da OS. Nao ha dados ficticios permanentes.
+
+## API REST tecnica
+
+Todos os endpoints abaixo exigem HTTP Basic temporario. Nao ha papeis definitivos nem autenticacao propria. O usuario padrao do Spring e user; a senha temporaria e exibida no log de inicializacao. Use a senha da instancia atual. A configuracao de seguranca do bootstrap permanece preservada.
+
+| Metodo | Endpoint | Operacao |
+| --- | --- | --- |
+| GET | /api/v1/diagnosticos/{id} | Consultar diagnostico por UUID |
+| GET | /api/v1/diagnosticos?osId={uuid} | Consultar unico diagnostico da OS |
+| POST | /api/v1/diagnosticos/{id}/itens | Adicionar item em IN_PROGRESS |
+| PATCH | /api/v1/diagnosticos/{id}/observacoes | Atualizar observacoes em PENDING ou IN_PROGRESS |
+| POST | /api/v1/diagnosticos/{id}/conclusao | Concluir IN_PROGRESS com itens validos |
+| GET | /api/v1/reparos/{id} | Consultar reparo por UUID |
+| GET | /api/v1/reparos?osId={uuid} | Consultar unico reparo da OS |
+| PATCH | /api/v1/reparos/{id}/observacoes | Atualizar observacoes em PENDING ou IN_PROGRESS |
+| POST | /api/v1/reparos/{id}/conclusao | Concluir somente IN_PROGRESS |
+| GET | /api/v1/execucoes/historico?osId={uuid} | Historico cronologico, ou lista vazia |
+
+Consultas de agregado retornam um objeto e HTTP 404 quando ausente, inclusive busca por osId. Alteracoes bem-sucedidas retornam HTTP 200 e o agregado atualizado, incluindo version. Historico retorna uma lista. Campos de resposta incluem os identificadores, estado, observacoes e timestamps; itens retornam quantidade e precoPrevisto como strings decimais, sem arredondamento.
+
+A API opera somente sobre agregados existentes. Nao existem endpoints de criacao, inicio, autorizacao, cancelamento ou alteracao generica de status. As factories de dominio e portas sao usadas somente pelos testes para preparar cenarios. A criacao e o inicio futuros dependem de diagnostic.start.v1 e repair.start.v1. authorizeAndStart nao e exposto por HTTP; PENDING nao pode ser concluido como reparo autorizado.
+
+### Adicionar item
+
+Exemplo (substitua ID e senha pelos valores reais da sua instancia):
+
+```bash
+curl -u "user:SENHA_TEMPORARIA" -X POST \
+  "http://localhost:8081/api/v1/diagnosticos/ID/itens" \
+  -H "Content-Type: application/json" \
+  -H "X-Correlation-Id: 00000000-0000-0000-0000-000000000001" \
+  -d '{"itemId":"item-001","descricao":"Troca de pastilhas de freio","tipo":"PECA","quantidade":"2","unidadePreco":"UNIDADE","precoPrevisto":"150.00"}'
+```
+
+Quantidade e preco sao strings decimais sem notacao exponencial: quantidade positiva e preco nao negativo. Ambos sao convertidos para BigDecimal, sem calculo de orcamento. itemId duplicado apos normalizacao retorna 409; dados obrigatorios ausentes ou invalidos retornam 400.
+
+### Atualizar observacoes e concluir
+
+```bash
+curl -u "user:SENHA_TEMPORARIA" -X PATCH \
+  "http://localhost:8081/api/v1/reparos/ID/observacoes" \
+  -H "Content-Type: application/json" \
+  -d '{"observacoes":"Teste tecnico realizado"}'
+
+curl -u "user:SENHA_TEMPORARIA" -X POST \
+  "http://localhost:8081/api/v1/reparos/ID/conclusao"
+```
+
+observacoes deve estar presente e nao ser null; string vazia permite limpar o texto. O mesmo formato atende diagnosticos.
+
+X-Correlation-Id e opcional nas alteracoes e deve ser UUID quando informado; e preservado no historico. Cada alteracao bem-sucedida registra referencias tecnicas, descricao, createdAt e eventType local (diagnostic.item-added, diagnostic.observations-updated, diagnostic.completed.locally, repair.observations-updated ou repair.completed.locally). O texto livre de observacoes nao e duplicado no historico.
+
+Concluir diagnostico ou reparo altera somente o MongoDB local. Nao publica diagnostic.completed.v1 ou repair.completed.v1 e nao avanca a Saga do OS Service. A mensageria sera implementada posteriormente.
+
+### Erros
+
+Erros de aplicacao usam application/problem+json (ProblemDetail), por exemplo:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Conflict",
+  "status": 409,
+  "detail": "Invalid repair transition"
+}
+```
+
+- 400: UUID, enum, JSON ou campos invalidos.
+- 401: autenticacao ausente ou invalida, tratada pelo Spring Security.
+- 404: agregado ou rota inexistente.
+- 409: regra de dominio, item duplicado, chave unica ou concorrencia.
+- 500: falha inesperada, com mensagem generica sem detalhes internos.
+
+### Validacao e relatorios
+
+```bash
+./mvnw clean verify
+docker compose config --quiet
+docker compose up --build -d
+docker compose ps
+docker compose exec execution-service curl -fsS http://localhost:8080/actuator/health/readiness
+```
+
+Para iniciar apenas o MongoDB transacional: docker compose up -d --wait mongodb; depois execute ./mvnw spring-boot:run no host.
+
+Os testes usam Testcontainers MongoDB 8 em replica set e nao dependem do MongoDB do Compose. Incluem HTTP autenticado, validacao de entrada, ausencia de rotas de autorizacao, precisao decimal, persistencia e historico, rollback apos falha de insercao do historico e duas alteracoes HTTP concorrentes (uma confirma e outra retorna 409).
+
+clean verify gera target/site/jacoco/index.html (abrir no navegador) e target/site/jacoco/jacoco.xml, verificando minimo de 80% de linhas. Os resultados individuais ficam em target/surefire-reports.

@@ -73,7 +73,8 @@ class DiagnosticTest {
         assertThat(failed.observacoes()).isEqualTo("falha tecnica");
         assertThatThrownBy(failed::start).isInstanceOf(DomainException.class);
         assertThatThrownBy(() -> failed.updateObservacoes("x")).isInstanceOf(DomainException.class);
-        assertThat(failed.cancel().status()).isEqualTo(DiagnosticStatus.CANCELLED);
+        assertThatThrownBy(failed::cancel).isInstanceOf(DomainException.class);
+        assertThat(failed.observacoes()).isEqualTo("falha tecnica");
         assertThat(started.cancel().status()).isEqualTo(DiagnosticStatus.CANCELLED);
         var cancelled = pending.cancel();
         assertThat(cancelled.status()).isEqualTo(DiagnosticStatus.CANCELLED);
