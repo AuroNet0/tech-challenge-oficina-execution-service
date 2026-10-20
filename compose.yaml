@@ -1,4 +1,21 @@
 services:
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    profiles: ["local-broker"]
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-execution}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-execution_local}
+    ports:
+      - "${EXECUTION_RABBITMQ_PORT:-5673}:5672"
+      - "${EXECUTION_RABBITMQ_MANAGEMENT_PORT:-15673}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
   mongodb:
     image: mongo:8.0
     container_name: oficina-execution-mongodb
@@ -21,6 +38,8 @@ services:
       start_period: 15s
 
   execution-service:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     build:
       context: .
     container_name: oficina-execution-service
@@ -34,6 +53,11 @@ services:
       MONGO_USERNAME: ${MONGO_USERNAME:-oficina_execution}
       MONGO_PASSWORD: ${MONGO_PASSWORD:-oficina_execution}
       MONGO_AUTH_DATABASE: admin
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-host.docker.internal}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5673}
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-execution}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-execution_local}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
     ports:
       - "8081:8080"
     healthcheck:
@@ -44,4 +68,5 @@ services:
       start_period: 30s
 
 volumes:
+  rabbitmq-data:
   mongodb-data:

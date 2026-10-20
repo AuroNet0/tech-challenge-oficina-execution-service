@@ -1,21 +1,21 @@
 # tech-challenge-oficina-execution-service
 
-Microsservico Execution Service do Tech Challenge FIAP - Fase 4, etapa 6.3.
+Microsservico Execution Service do Tech Challenge FIAP - Fase 4, etapa 6.4.
 
 ## Objetivo
 
 O Execution Service implementa o dominio de diagnostico tecnico e execucao dos reparos de uma ordem de servico, com persistencia propria MongoDB. O bootstrap de Spring Boot, seguranca inicial, OpenAPI, health checks e Docker permanece preservado.
 
-A API REST permite consultar e atualizar tecnicamente diagnosticos e reparos existentes. Nao ha RabbitMQ, Saga, Inbox, Outbox, JWT definitivo ou integracao com outros servicos nesta etapa. Nenhum evento e publicado: conclusoes sao persistidas somente localmente.
+A API REST permite consultar e atualizar tecnicamente diagnosticos e reparos existentes. Comandos RabbitMQ do OS Service iniciam diagnosticos e autorizam reparos. Inbox, estado tecnico, historico e Outbox sao persistidos atomicamente no MongoDB; eventos de resultado sao publicados posteriormente pela Outbox. A Saga continua exclusivamente no OS Service. Consulte [docs/messaging.md](docs/messaging.md) para contratos, operacao e execucao integrada.
 
-## Responsabilidades futuras
+## Responsabilidades
 
 - Consumir comandos do OS Service, como `diagnostic.start.v1`, `repair.start.v1` e `repair.cancel.v1`.
 - Publicar eventos para a saga orquestrada pelo OS Service, como `diagnostic.started.v1`, `diagnostic.completed.v1`, `repair.started.v1`, `repair.completed.v1` e eventos de falha.
 - Integrar os estados tecnicos ja persistidos no MongoDB com comandos e eventos.
 - Participar da arquitetura de microsservicos sem consultar diretamente bancos do OS Service ou Billing Service.
 
-Os contratos futuros devem seguir a referencia do OS Service em `docs/events.md` e `docs/saga.md`.
+Os contratos seguem a referencia do OS Service em `docs/events.md` e `docs/saga.md`.
 
 ## Tecnologias
 
@@ -29,7 +29,8 @@ Os contratos futuros devem seguir a referencia do OS Service em `docs/events.md`
 - Springdoc OpenAPI 3.1.1
 - JUnit 5
 - Mockito
-- Testcontainers MongoDB
+- RabbitMQ, Transactional Inbox e Outbox
+- Testcontainers MongoDB e RabbitMQ
 - JaCoCo
 - Docker e Docker Compose
 
@@ -150,7 +151,7 @@ A cobertura minima configurada e de 80% por linhas de codigo. A unica exclusao e
 
 - Diagnostic nasce PENDING; start permite PENDING -> IN_PROGRESS; complete e fail permitem IN_PROGRESS -> COMPLETED ou FAILED. Cancelamento e permitido somente em PENDING ou IN_PROGRESS. FAILED preserva a falha e a justificativa, sem conversao implicita para CANCELLED. COMPLETED, CANCELLED e FAILED nao aceitam edicao.
 - Diagnostico concluido exige pelo menos um item valido. Itens so podem ser adicionados durante IN_PROGRESS; itemId deve ser unico apos strip. Quantidade deve ser positiva e precoPrevisto nao negativo. Descricao e identificador nao podem estar vazios. Nao ha calculo de orcamento.
-- Repair nasce PENDING. authorizeAndStart representa explicitamente a autorizacao futura recebida por repair.start.v1: PENDING -> IN_PROGRESS. Nao existe setter generico de status nem operacao start sem autorizacao. complete e fail exigem IN_PROGRESS.
+- Repair nasce PENDING. authorizeAndStart representa explicitamente a autorizacao recebida por repair.start.v1: PENDING -> IN_PROGRESS. Nao existe setter generico de status nem operacao start sem autorizacao. complete e fail exigem IN_PROGRESS.
 - cancel confirma cancelamento apenas em PENDING. cancellationOutcome distingue CANCELLATION_ALLOWED (PENDING), CONFIRMED (CANCELLED), MANUAL_INTERVENTION_REQUIRED (IN_PROGRESS ou FAILED) e COMPENSATION_FAILED (COMPLETED), sem alterar o estado fisico. COMPLETED e CANCELLED sao terminais. A confirmacao de compensacao de trabalho iniciado depende de politica e evidencias futuras; nao e simulada nesta etapa.
 - Operacoes retornam novas instancias; o chamador deve utilizar o retorno, inclusive de save (que devolve a nova version). Os construtores validam snapshots para reconstituicao; os futuros casos de uso devem utilizar as operacoes de dominio para transicoes e validar a origem da autorizacao.
 - ExecutionHistory e imutavel e sua persistencia usa insert: salvar novamente o mesmo id falha, sem sobrescrever o registro. Referencias tecnicas sao opcionais para notas da OS; futuros casos de uso devem informa-las quando aplicaveis. Descricoes devem conter somente informacao tecnica necessaria, sem dados pessoais, credenciais ou outros dados sensiveis.
@@ -162,10 +163,12 @@ A cobertura minima configurada e de 80% por linhas de codigo. A unica exclusao e
 | diagnostics | id, osId, sagaId, status, observacoes, items embutidos, createdAt, updatedAt, completedAt, version | osId unico (unique_os); sagaId (saga) |
 | work_orders | id, osId, sagaId, diagnosticId, status, observacoes, startedAt, completedAt, createdAt, updatedAt, version | osId unico (unique_os); sagaId (saga) |
 | execution_history | id, osId, diagnosticId e repairId opcionais, eventType, description, createdAt, correlationId opcional | osId ASC + createdAt ASC (history_os_created) |
+| inbox_messages | eventId, envelope, contexto, status e timestamps | eventId como _id unico; osId + receivedAt |
+| outbox_events | evento, envelope, contexto, tentativas, lease e sequencia | eventId como _id unico; status + nextAttemptAt; status + lockedUntil; osId + sequence unico |
 
 O id e persistido como _id, com indice unico nativo do MongoDB. UUIDs sao strings canonicas, inclusive nos relacionamentos; nao ha DBRef. Um diagnostico e um reparo por OS sao garantidos pelos indices unicos. Saga nao e unica. Historico e ordenado por createdAt crescente, usando id como desempate.
 
-Os indices anotados sao efetivamente criados com spring.data.mongodb.auto-index-creation=true; os testes consultam seus metadados e exercitam violacoes de unicidade. MongoDB e o unico banco. A existencia da OS nao e consultada. A consistencia entre osId, sagaId e diagnosticId e a conclusao do diagnostico referenciado deverao ser verificadas explicitamente pelos futuros casos de uso; os repositorios nao simulam foreign keys.
+Os indices anotados sao efetivamente criados com spring.data.mongodb.auto-index-creation=true; os testes consultam seus metadados e exercitam violacoes de unicidade. MongoDB e o unico banco. A existencia da OS nao e consultada. O handler valida sagaId e diagnostico concluido/consistente antes de autorizar reparo; os repositorios nao simulam foreign keys.
 
 DiagnosticDocument e RepairDocument usam @Version Long, inicialmente null, para controle otimista. Atualizacoes com versao obsoleta lancam OptimisticLockingFailureException e nao sobrescrevem dados. Cada save e atomico apenas no proprio documento. Instantes produzidos pelas fabricas e transicoes usam precisao de milissegundos, compativel com BSON Date.
 
@@ -178,13 +181,13 @@ Referencias consultadas na branch homolog:
 
 Os nomes itemId, descricao, tipo, quantidade, unidadePreco e precoPrevisto correspondem ao contrato diagnostic.completed.v1. Tipos e unidades preservam SERVICO/PECA/MATERIAL e UNIDADE/HORA/KIT. No dominio, numeros sao BigDecimal; no documento, quantidade e precoPrevisto sao strings decimais produzidas por toPlainString, preservando precisao e escala sem limitar valores a Decimal128. precoPrevisto e estimativa unitaria para o Billing futuro.
 
-O futuro mapper de mensagens devera igualmente emitir quantidade e precoPrevisto como strings decimais (nao serializar o BigDecimal diretamente como numero), preservar osId, sagaId e correlationId e montar o envelope documentado pelo OS Service. Os documentos MongoDB nao sao envelopes RabbitMQ. Falhas e cancelamentos seguem a distincao da saga entre repair.failed.v1, repair.cancelled.v1 e repair.cancellation-failed.v1; nenhuma dessas mensagens e produzida nesta etapa.
+O mapper de mensagens emite quantidade e precoPrevisto como strings decimais, preserva osId, sagaId e correlationId e monta o envelope documentado pelo OS Service. Falhas e cancelamentos seguem a distincao entre repair.failed.v1, repair.cancelled.v1 e repair.cancellation-failed.v1. A Outbox armazena o envelope completo, com eventId proprio e estavel entre tentativas.
 
 ## Atomicidade e limites
 
 MongoTransactionManager esta configurado. Os casos de uso de escrita usam @Transactional: alteracao de Diagnostic ou Repair e insercao de ExecutionHistory confirmam ou revertem juntos. Falhas de historico nao deixam o estado tecnico atualizado. Versoes obsoletas e conflitos de escrita de transacoes retornam HTTP 409, sem retry automatico. O cliente deve consultar novamente antes de decidir como reaplicar sua alteracao.
 
-O futuro consumidor devera incluir Inbox e Outbox na mesma transacao do estado tecnico e historico. A publicacao RabbitMQ devera ocorrer posteriormente pela Outbox. O historico tecnico nao coordena a Saga.
+O consumidor inclui Inbox e Outbox na mesma transacao do estado tecnico e historico. As conclusoes REST incluem a Outbox na transacao. A publicacao RabbitMQ ocorre posteriormente, sem transacao MongoDB aberta durante o confirm. O historico tecnico nao coordena a Saga.
 
 Testcontainers usa MongoDB 8 em replica set e valida rollback real entre diagnostics e execution_history, alem de persistencia, precisao decimal, reconstrucao, indices, ordenacao, unicidade e concorrencia otimista. Os testes de bootstrap permanecem preservados.
 
@@ -192,7 +195,7 @@ O script docker/mongo-entrypoint.sh gera uma chave interna em /data/db/.replica-
 
 O membro anuncia mongodb:27017. A URI usa replicaSet=rs0 e directConnection=true para funcionar tanto no Compose quanto com a aplicacao executada no host via porta publicada. Esse replica set de um membro e destinado ao desenvolvimento, sem alta disponibilidade. Arquivos shell sao versionados com LF para funcionar tambem em checkouts Windows.
 
-Nao foram implementados consumidores, mensageria, Inbox/Outbox, saga, Billing, pagamentos, JWT definitivo, infraestrutura cloud ou alteracao de status da OS. Nao ha dados ficticios permanentes.
+Nao foram implementados outro orquestrador de Saga, Billing, pagamentos, JWT definitivo, infraestrutura cloud ou alteracao direta de status da OS. Nao ha dados ficticios permanentes.
 
 ## API REST tecnica
 
@@ -213,7 +216,7 @@ Todos os endpoints abaixo exigem HTTP Basic temporario. Nao ha papeis definitivo
 
 Consultas de agregado retornam um objeto e HTTP 404 quando ausente, inclusive busca por osId. Alteracoes bem-sucedidas retornam HTTP 200 e o agregado atualizado, incluindo version. Historico retorna uma lista. Campos de resposta incluem os identificadores, estado, observacoes e timestamps; itens retornam quantidade e precoPrevisto como strings decimais, sem arredondamento.
 
-A API opera somente sobre agregados existentes. Nao existem endpoints de criacao, inicio, autorizacao, cancelamento ou alteracao generica de status. As factories de dominio e portas sao usadas somente pelos testes para preparar cenarios. A criacao e o inicio futuros dependem de diagnostic.start.v1 e repair.start.v1. authorizeAndStart nao e exposto por HTTP; PENDING nao pode ser concluido como reparo autorizado.
+A API opera somente sobre agregados existentes. Nao existem endpoints de criacao, inicio, autorizacao, cancelamento ou alteracao generica de status. A criacao e o inicio dependem de diagnostic.start.v1 e repair.start.v1. authorizeAndStart nao e exposto por HTTP; PENDING nao pode ser concluido como reparo autorizado.
 
 ### Adicionar item
 
@@ -243,9 +246,9 @@ curl -u "user:SENHA_TEMPORARIA" -X POST \
 
 observacoes deve estar presente e nao ser null; string vazia permite limpar o texto. O mesmo formato atende diagnosticos.
 
-X-Correlation-Id e opcional nas alteracoes e deve ser UUID quando informado; e preservado no historico. Cada alteracao bem-sucedida registra referencias tecnicas, descricao, createdAt e eventType local (diagnostic.item-added, diagnostic.observations-updated, diagnostic.completed.locally, repair.observations-updated ou repair.completed.locally). O texto livre de observacoes nao e duplicado no historico.
+X-Correlation-Id e opcional nas alteracoes e deve ser UUID quando informado; e preservado no historico. Nas conclusoes, sua ausencia recupera a correlacao do ultimo comando processado da OS. Cada alteracao bem-sucedida registra referencias tecnicas, descricao, createdAt e eventType (diagnostic.item-added, diagnostic.observations-updated, diagnostic.completed.v1, repair.observations-updated ou repair.completed.v1). O texto livre de observacoes nao e duplicado no historico.
 
-Concluir diagnostico ou reparo altera somente o MongoDB local. Nao publica diagnostic.completed.v1 ou repair.completed.v1 e nao avanca a Saga do OS Service. A mensageria sera implementada posteriormente.
+Concluir diagnostico ou reparo salva o estado, historico e diagnostic.completed.v1 ou repair.completed.v1 na Outbox atomicamente. O worker publica esses eventos para a Saga do OS Service. Falha de Outbox causa rollback da conclusao; indisponibilidade do broker nao impede o commit local. A entrega e at-least-once e o OS Service deduplica pelo eventId.
 
 ### Erros
 

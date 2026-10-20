@@ -1,6 +1,7 @@
 package com.oficina.execution.application.usecase;
 
 import java.util.UUID;
+import com.oficina.execution.application.message.EventPayload;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.oficina.execution.application.exception.ResourceNotFoundException;
@@ -14,10 +15,12 @@ import com.oficina.execution.domain.model.ExecutionHistory;
 public class RepairService implements RepairUseCase {
     private final RepairRepositoryPort repairs;
     private final ExecutionHistoryRepositoryPort history;
+    private final EventRecorder events;
 
-    public RepairService(RepairRepositoryPort repairs, ExecutionHistoryRepositoryPort history) {
+    public RepairService(RepairRepositoryPort repairs, ExecutionHistoryRepositoryPort history, EventRecorder events) {
         this.repairs = repairs;
         this.history = history;
+        this.events = events;
     }
 
     @Override
@@ -40,8 +43,13 @@ public class RepairService implements RepairUseCase {
     @Override
     @Transactional
     public Repair complete(UUID id, UUID correlationId) {
-        return save(findById(id).complete(), "repair.completed.locally",
-                "Reparo concluido localmente, sem publicacao de evento", correlationId);
+        Repair value = findById(id).complete();
+        UUID correlation = correlationId != null ? correlationId : events.correlation(value.osId());
+        Repair completed = save(value, "repair.completed.v1",
+                "Reparo concluido", correlation);
+        events.record(completed.id(), "Repair", completed.osId(), completed.sagaId(), correlation,
+                "repair.completed.v1", new EventPayload.RepairCompleted(completed.id().toString()));
+        return completed;
     }
 
     private Repair save(Repair value, String eventType, String description, UUID correlationId) {
@@ -49,5 +57,17 @@ public class RepairService implements RepairUseCase {
         history.save(ExecutionHistory.create(saved.osId(), saved.diagnosticId(), saved.id(),
                 eventType, description, correlationId));
         return saved;
+    }
+
+    @Override
+    @Transactional
+    public Repair fail(UUID id, String reason, UUID correlationId) {
+        Repair value = findById(id).fail(reason);
+        UUID correlation = correlationId != null ? correlationId : events.correlation(value.osId());
+        Repair failed = save(value, "repair.failed.v1",
+                "Reparo falhou", correlation);
+        events.record(failed.id(), "Repair", failed.osId(), failed.sagaId(), correlation,
+                "repair.failed.v1", new EventPayload.Failure(failed.observacoes()));
+        return failed;
     }
 }

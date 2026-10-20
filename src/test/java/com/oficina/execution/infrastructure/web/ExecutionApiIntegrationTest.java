@@ -139,7 +139,7 @@ class ExecutionApiIntegrationTest {
             assertThat(entry.correlationId()).isEqualTo(correlationId);
         });
         assertThat(entries).extracting(ExecutionHistory::eventType)
-                .containsExactlyInAnyOrder("diagnostic.item-added", "diagnostic.completed.locally");
+                .containsExactlyInAnyOrder("diagnostic.item-added", "diagnostic.completed.v1");
     }
 
     @Test

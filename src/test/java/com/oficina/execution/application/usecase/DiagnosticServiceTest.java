@@ -22,13 +22,14 @@ import org.springframework.dao.OptimisticLockingFailureException;
 class DiagnosticServiceTest {
     @Mock DiagnosticRepositoryPort repository;
     @Mock ExecutionHistoryRepositoryPort history;
+    @Mock EventRecorder events;
     DiagnosticService service;
     Diagnostic diagnostic;
     UUID correlationId = UUID.randomUUID();
 
     @BeforeEach
     void setup() {
-        service = new DiagnosticService(repository, history);
+        service = new DiagnosticService(repository, history, events);
         diagnostic = Diagnostic.create(UUID.randomUUID(), UUID.randomUUID()).start();
     }
 
@@ -69,15 +70,17 @@ class DiagnosticServiceTest {
     }
 
     @Test
-    void completesLocallyAndRecordsHistory() {
+    void completesAndRecordsHistoryAndOutbox() {
         diagnostic = diagnostic.addItem(item());
         when(repository.findById(diagnostic.id())).thenReturn(Optional.of(diagnostic));
         when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         var completed = service.complete(diagnostic.id(), correlationId);
         assertThat(completed.status()).isEqualTo(DiagnosticStatus.COMPLETED);
         assertThat(completed.completedAt()).isNotNull();
-        verify(history).save(argThat(entry -> entry.eventType().equals("diagnostic.completed.locally")
+        verify(history).save(argThat(entry -> entry.eventType().equals("diagnostic.completed.v1")
                 && entry.correlationId().equals(correlationId)));
+        verify(events).record(eq(diagnostic.id()), eq("Diagnostic"), eq(diagnostic.osId()),
+                eq(diagnostic.sagaId()), eq(correlationId), eq("diagnostic.completed.v1"), any());
     }
 
     @Test

@@ -10,4 +10,5 @@ public interface DiagnosticUseCase {
     Diagnostic addItem(UUID id, DiagnosticItem item, UUID correlationId);
     Diagnostic updateObservacoes(UUID id, String observacoes, UUID correlationId);
     Diagnostic complete(UUID id, UUID correlationId);
+    Diagnostic fail(UUID id, String reason, UUID correlationId);
 }

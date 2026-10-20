@@ -1,6 +1,7 @@
 package com.oficina.execution.application.usecase;
 
 import java.util.UUID;
+import com.oficina.execution.application.message.EventPayload;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.oficina.execution.application.exception.ResourceNotFoundException;
@@ -15,10 +16,12 @@ import com.oficina.execution.domain.model.DiagnosticItem;
 public class DiagnosticService implements DiagnosticUseCase {
     private final DiagnosticRepositoryPort diagnostics;
     private final ExecutionHistoryRepositoryPort history;
+    private final EventRecorder events;
 
-    public DiagnosticService(DiagnosticRepositoryPort diagnostics, ExecutionHistoryRepositoryPort history) {
+    public DiagnosticService(DiagnosticRepositoryPort diagnostics, ExecutionHistoryRepositoryPort history, EventRecorder events) {
         this.diagnostics = diagnostics;
         this.history = history;
+        this.events = events;
     }
 
     @Override
@@ -47,8 +50,13 @@ public class DiagnosticService implements DiagnosticUseCase {
     @Override
     @Transactional
     public Diagnostic complete(UUID id, UUID correlationId) {
-        return save(findById(id).complete(), "diagnostic.completed.locally",
-                "Diagnostico concluido localmente, sem publicacao de evento", correlationId);
+        Diagnostic value = findById(id).complete();
+        UUID correlation = correlationId != null ? correlationId : events.correlation(value.osId());
+        Diagnostic completed = save(value, "diagnostic.completed.v1",
+                "Diagnostico concluido", correlation);
+        events.record(completed.id(), "Diagnostic", completed.osId(), completed.sagaId(), correlation,
+                "diagnostic.completed.v1", EventPayload.DiagnosticCompleted.from(completed.items()));
+        return completed;
     }
 
     private Diagnostic save(Diagnostic value, String eventType, String description, UUID correlationId) {
@@ -56,5 +64,17 @@ public class DiagnosticService implements DiagnosticUseCase {
         history.save(ExecutionHistory.create(saved.osId(), saved.id(), null,
                 eventType, description, correlationId));
         return saved;
+    }
+
+    @Override
+    @Transactional
+    public Diagnostic fail(UUID id, String reason, UUID correlationId) {
+        Diagnostic value = findById(id).fail(reason);
+        UUID correlation = correlationId != null ? correlationId : events.correlation(value.osId());
+        Diagnostic failed = save(value, "diagnostic.failed.v1",
+                "Diagnostico falhou", correlation);
+        events.record(failed.id(), "Diagnostic", failed.osId(), failed.sagaId(), correlation,
+                "diagnostic.failed.v1", new EventPayload.Failure(failed.observacoes()));
+        return failed;
     }
 }

@@ -22,13 +22,14 @@ import org.springframework.dao.OptimisticLockingFailureException;
 class RepairServiceTest {
     @Mock RepairRepositoryPort repository;
     @Mock ExecutionHistoryRepositoryPort history;
+    @Mock EventRecorder events;
     RepairService service;
     Repair repair;
     UUID correlationId = UUID.randomUUID();
 
     @BeforeEach
     void setup() {
-        service = new RepairService(repository, history);
+        service = new RepairService(repository, history, events);
         repair = Repair.create(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID()).authorizeAndStart();
     }
 
@@ -64,15 +65,17 @@ class RepairServiceTest {
     }
 
     @Test
-    void completesLocallyAndRecordsHistory() {
+    void completesAndRecordsHistoryAndOutbox() {
         
         when(repository.findById(repair.id())).thenReturn(Optional.of(repair));
         when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         var completed = service.complete(repair.id(), correlationId);
         assertThat(completed.status()).isEqualTo(RepairStatus.COMPLETED);
         assertThat(completed.completedAt()).isNotNull();
-        verify(history).save(argThat(entry -> entry.eventType().equals("repair.completed.locally")
+        verify(history).save(argThat(entry -> entry.eventType().equals("repair.completed.v1")
                 && entry.correlationId().equals(correlationId)));
+        verify(events).record(eq(repair.id()), eq("Repair"), eq(repair.osId()),
+                eq(repair.sagaId()), eq(correlationId), eq("repair.completed.v1"), any());
     }
 
     @Test

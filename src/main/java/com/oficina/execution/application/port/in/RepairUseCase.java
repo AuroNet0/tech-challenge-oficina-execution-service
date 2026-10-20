@@ -8,4 +8,5 @@ public interface RepairUseCase {
     Repair findByOsId(UUID osId);
     Repair updateObservacoes(UUID id, String observacoes, UUID correlationId);
     Repair complete(UUID id, UUID correlationId);
+    Repair fail(UUID id, String reason, UUID correlationId);
 }

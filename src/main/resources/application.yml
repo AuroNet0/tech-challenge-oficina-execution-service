@@ -1,4 +1,21 @@
 spring:
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:execution}
+    password: ${RABBITMQ_PASSWORD:execution_local}
+    virtual-host: ${RABBITMQ_VHOST:/}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    connection-timeout: 3s
+    template:
+      mandatory: true
+    listener:
+      simple:
+        acknowledge-mode: auto
+        missing-queues-fatal: false
+        prefetch: 1
+        default-requeue-rejected: true
   data:
     mongodb:
       auto-index-creation: true
@@ -23,6 +40,8 @@ management:
       exposure:
         include: health
   health:
+    rabbit:
+      enabled: false
     livenessstate:
       enabled: true
     readinessstate:
@@ -33,3 +52,18 @@ management:
 springdoc:
   swagger-ui:
     path: /swagger-ui/index.html
+
+execution:
+  messaging:
+    enabled: ${COMMAND_CONSUMER_ENABLED:true}
+    confirm-timeout: ${RABBITMQ_CONFIRM_TIMEOUT:5s}
+    retry-delay: ${COMMAND_RETRY_DELAY:5s}
+    max-deliveries: ${COMMAND_MAX_DELIVERIES:5}
+  outbox:
+    enabled: ${OUTBOX_PUBLISHER_ENABLED:true}
+    fixed-delay: ${OUTBOX_FIXED_DELAY:5s}
+    batch-size: ${OUTBOX_BATCH_SIZE:10}
+    lease-duration: ${OUTBOX_LEASE_DURATION:1m}
+    max-attempts: ${OUTBOX_MAX_ATTEMPTS:5}
+    initial-backoff: ${OUTBOX_INITIAL_BACKOFF:10s}
+    max-backoff: ${OUTBOX_MAX_BACKOFF:5m}
