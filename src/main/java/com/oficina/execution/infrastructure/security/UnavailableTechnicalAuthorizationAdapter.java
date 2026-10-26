@@ -5,6 +5,7 @@ import com.oficina.execution.application.port.out.TechnicalAuthorizationPort;
 import org.springframework.stereotype.Component;
 
 @Component
+@org.springframework.context.annotation.Profile("!mtls")
 public class UnavailableTechnicalAuthorizationAdapter implements TechnicalAuthorizationPort {
     @Override
     public Decision decide(Request request) {
