@@ -30,6 +30,7 @@ management:
       probes:
         enabled: true
       show-details: never
+      show-components: never
       group:
         readiness:
           include: readinessState,mongo
@@ -50,10 +51,18 @@ management:
       enabled: true
 
 springdoc:
+  api-docs:
+    enabled: false
   swagger-ui:
+    enabled: false
     path: /swagger-ui/index.html
 
 execution:
+  security:
+    jwt:
+      issuer: ${EXECUTION_JWT_ISSUER:}
+      audience: ${EXECUTION_JWT_AUDIENCE:}
+      jwks-uri: ${EXECUTION_JWT_JWKS_URI:}
   messaging:
     enabled: ${COMMAND_CONSUMER_ENABLED:true}
     confirm-timeout: ${RABBITMQ_CONFIRM_TIMEOUT:5s}

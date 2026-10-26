@@ -18,6 +18,15 @@ import org.springframework.web.bind.ServletRequestBindingException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ProblemDetail forbidden(Exception exception) {
+        return problem(HttpStatus.FORBIDDEN, "Acesso negado.");
+    }
+
+    @ExceptionHandler(com.oficina.execution.application.exception.AuthorizationUnavailableException.class)
+    public ProblemDetail authorizationUnavailable(Exception exception) {
+        return problem(HttpStatus.SERVICE_UNAVAILABLE, "Autorizacao operacional indisponivel.");
+    }
     @ExceptionHandler(ResourceNotFoundException.class)
     public ProblemDetail notFound(ResourceNotFoundException exception) {
         return problem(HttpStatus.NOT_FOUND, exception.getMessage());

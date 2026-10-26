@@ -1,6 +1,8 @@
 # Etapa 6.5 — OS + Execution reais
 
-Este ambiente executa os dois servicos da branch homolog com PostgreSQL 17, MongoDB 8 em replica set rs0 e **um unico RabbitMQ 4 compartilhado**. Nao modifica os Compose originais, application.yml ou codigo Java.
+Roteiro historico da etapa 6.5, anterior ao JWT. **Nao e executavel como homologacao da seguranca 8.3.3:** os scripts/Compose deste diretorio usam Basic legado e nao integram o canal interno de autorizacao OS. Nao foram executados nesta entrega. Sua migracao exige configuracao JWT, atores e canal confiavel; nao abrir endpoints ou alterar bancos para faze-los passar. Validacao atual: suites Maven/Testcontainers e [relatorio 8.3.3](../docs/security/execution-authorization-8.3.3.md), sem declaracao de Saga E2E distribuida.
+
+Na entrega historica este ambiente executava os dois servicos da branch homolog com PostgreSQL 17, MongoDB 8 em replica set rs0 e **um unico RabbitMQ 4 compartilhado**. As instrucoes seguintes registram esse cenario anterior.
 
 ## Pre-requisitos
 
@@ -11,7 +13,7 @@ Este ambiente executa os dois servicos da branch homolog com PostgreSQL 17, Mong
 - Portas livres 18080 (OS), 18081 (Execution) e 18572 (management RabbitMQ), publicadas somente em 127.0.0.1. PostgreSQL, MongoDB e AMQP nao sao publicados no host.
 - Recursos suficientes para os dois builds e cinco containers.
 
-Credenciais integration/integration_only sao fixtures locais deste ambiente isolado. Nunca reutilizar em producao. Os usuarios HTTP continuam sendo os usuarios padrao configuraveis do Spring Security, sem nova autenticacao ou alteracao no codigo.
+Credenciais integration/integration_only eram fixtures locais desse ambiente isolado. Nunca reutilizar em producao. O Basic HTTP desse roteiro foi removido do Execution na etapa 8.3.3.
 
 ## Executar as suites existentes primeiro
 

@@ -1,12 +1,13 @@
 package com.oficina.execution.infrastructure.web;
 
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import org.junit.jupiter.api.Test;
+import com.oficina.execution.security.JwksFixture;
+import com.oficina.execution.security.JwtTestConfiguration;
+import org.springframework.context.annotation.Import;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -20,6 +21,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers
 @SpringBootTest
 @AutoConfigureMockMvc
+@Import(JwtTestConfiguration.class)
 class BootstrapWebIntegrationTest {
 
 	@Container
@@ -32,11 +34,14 @@ class BootstrapWebIntegrationTest {
 
 	@Autowired
 	private MockMvc mockMvc;
+	@Autowired JwksFixture jwks;
 
 	@Test
 	void healthEndpointsArePublicAndReadyWhenMongoIsAvailable() throws Exception {
 		mockMvc.perform(get("/actuator/health"))
 				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.components").doesNotExist())
+				.andExpect(jsonPath("$.details").doesNotExist())
 				.andExpect(jsonPath("$.status").value("UP"));
 
 		mockMvc.perform(get("/actuator/health/liveness"))
@@ -49,14 +54,12 @@ class BootstrapWebIntegrationTest {
 	}
 
 	@Test
-	void swaggerEndpointsArePublic() throws Exception {
+	void swaggerEndpointsAreDenied() throws Exception {
 		mockMvc.perform(get("/v3/api-docs"))
-				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.info.title").value("Tech Challenge Oficina - Execution Service"));
+				.andExpect(status().isUnauthorized());
 
 		mockMvc.perform(get("/swagger-ui/index.html"))
-				.andExpect(status().isFound())
-				.andExpect(redirectedUrl("/swagger-ui/swagger-ui/index.html"));
+				.andExpect(status().isUnauthorized());
 	}
 
 	@Test
@@ -66,10 +69,19 @@ class BootstrapWebIntegrationTest {
 	}
 
 	@Test
-	void authenticatedRequestsCanReachInternalBootstrapStatus() throws Exception {
-		mockMvc.perform(get("/internal/bootstrap").with(user("api")))
-				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.service").value("execution-service"))
-				.andExpect(jsonPath("$.status").value("BOOTSTRAPPED"));
+	void authenticatedUsersCannotReachInternalEndpointsOrDocumentation() throws Exception {
+		for (String path : java.util.List.of("/internal/bootstrap", "/v3/api-docs", "/swagger-ui/index.html",
+				"/actuator/env", "/actuator/metrics", "/unknown")) {
+			mockMvc.perform(get(path).header("Authorization", "Bearer " + jwks.token("GERENTE")))
+					.andExpect(status().isForbidden());
+		}
+	}
+
+	@Test
+	void missingTrustedAdapterBlocksAssignedOperationsInProductionWiring() throws Exception {
+		mockMvc.perform(get("/api/v1/execucoes/historico").param("osId", java.util.UUID.randomUUID().toString())
+				.header("Authorization", "Bearer " + jwks.token("MECANICO")))
+				.andExpect(status().isServiceUnavailable())
+				.andExpect(jsonPath("$.detail").value("Autorizacao operacional indisponivel."));
 	}
 }

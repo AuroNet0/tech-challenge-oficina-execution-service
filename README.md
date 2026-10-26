@@ -77,7 +77,7 @@ O banco padrao de desenvolvimento e `oficina_execution`. A propriedade usada pel
 
 ## Execucao local
 
-Com MongoDB disponivel:
+Com MongoDB disponivel, defina EXECUTION_JWT_ISSUER, EXECUTION_JWT_AUDIENCE e EXECUTION_JWT_JWKS_URI (HTTPS) conforme o Auth do ambiente. Essas variaveis sao obrigatorias, inclusive no Compose; nao ha valores produtivos padrao. Entao execute:
 
 ```bash
 ./mvnw spring-boot:run
@@ -102,20 +102,19 @@ URLs principais:
 - Health: `http://localhost:8081/actuator/health`
 - Liveness: `http://localhost:8081/actuator/health/liveness`
 - Readiness: `http://localhost:8081/actuator/health/readiness`
-- Swagger UI: `http://localhost:8081/swagger-ui/index.html`
-- OpenAPI JSON: `http://localhost:8081/v3/api-docs`
+- Swagger/OpenAPI e `/internal/bootstrap` permanecem bloqueados.
 
 ## Seguranca
 
-A configuracao inicial permite acesso publico apenas a:
+A etapa 8.3.3 permite acesso sem JWT humano apenas aos GETs de probes, sem detalhes de componentes:
 
 - `/actuator/health`
 - `/actuator/health/liveness`
 - `/actuator/health/readiness`
-- `/swagger-ui/**`
-- `/v3/api-docs/**`
 
-As demais rotas exigem autenticacao HTTP Basic gerada pelo Spring Security. Nao ha login proprio nem JWT definitivo nesta etapa.
+Operacoes tecnicas exigem Bearer JWT RS256 valido, ROLE_MECANICO e capacidade especifica na OS atribuida. Basic nao e aceito. O Execution resolve o osId do agregado e consulta uma porta de autorizacao; como o OS ainda nao oferece canal interno confiavel/capacidades de escrita, o adapter produtivo mantem essas operacoes bloqueadas (503). CLIENTE, ATENDENTE e GERENTE nao recebem acesso tecnico pelo papel; demais rotas/metodos sao negados por padrao. RabbitMQ continua independente de JWT humano.
+
+Arquitetura, matriz completa, contrato proposto, limitacoes e evidencias: [autorizacao 8.3.3](docs/security/execution-authorization-8.3.3.md).
 
 ## Testes e cobertura
 
@@ -195,11 +194,11 @@ O script docker/mongo-entrypoint.sh gera uma chave interna em /data/db/.replica-
 
 O membro anuncia mongodb:27017. A URI usa replicaSet=rs0 e directConnection=true para funcionar tanto no Compose quanto com a aplicacao executada no host via porta publicada. Esse replica set de um membro e destinado ao desenvolvimento, sem alta disponibilidade. Arquivos shell sao versionados com LF para funcionar tambem em checkouts Windows.
 
-Nao foram implementados outro orquestrador de Saga, Billing, pagamentos, JWT definitivo, infraestrutura cloud ou alteracao direta de status da OS. Nao ha dados ficticios permanentes.
+Nao foram implementados outro orquestrador de Saga, Billing, pagamentos, infraestrutura cloud ou alteracao direta de status da OS. Nao ha dados ficticios permanentes. JWT e politica HTTP foram acrescentados na etapa 8.3.3; a dependencia de autorizacao distribuida com OS permanece bloqueada.
 
 ## API REST tecnica
 
-Todos os endpoints abaixo exigem HTTP Basic temporario. Nao ha papeis definitivos nem autenticacao propria. O usuario padrao do Spring e user; a senha temporaria e exibida no log de inicializacao. Use a senha da instancia atual. A configuracao de seguranca do bootstrap permanece preservada.
+Todos os endpoints abaixo exigem JWT RS256, papel MECANICO e autorizacao atual da OS para a capacidade solicitada. As respostas de sucesso descritas dependem dessa decisao; atualmente o canal produtivo permanece bloqueado. Os exemplos Bearer ilustram o contrato HTTP, sem ativar a integracao OS nem contornar a autorizacao.
 
 | Metodo | Endpoint | Operacao |
 | --- | --- | --- |
@@ -220,10 +219,10 @@ A API opera somente sobre agregados existentes. Nao existem endpoints de criacao
 
 ### Adicionar item
 
-Exemplo (substitua ID e senha pelos valores reais da sua instancia):
+Exemplo (substitua ID e TOKEN pelo JWT valido do Auth, sem registrar o token):
 
 ```bash
-curl -u "user:SENHA_TEMPORARIA" -X POST \
+curl -H "Authorization: Bearer TOKEN" -X POST \
   "http://localhost:8081/api/v1/diagnosticos/ID/itens" \
   -H "Content-Type: application/json" \
   -H "X-Correlation-Id: 00000000-0000-0000-0000-000000000001" \
@@ -235,12 +234,12 @@ Quantidade e preco sao strings decimais sem notacao exponencial: quantidade posi
 ### Atualizar observacoes e concluir
 
 ```bash
-curl -u "user:SENHA_TEMPORARIA" -X PATCH \
+curl -H "Authorization: Bearer TOKEN" -X PATCH \
   "http://localhost:8081/api/v1/reparos/ID/observacoes" \
   -H "Content-Type: application/json" \
   -d '{"observacoes":"Teste tecnico realizado"}'
 
-curl -u "user:SENHA_TEMPORARIA" -X POST \
+curl -H "Authorization: Bearer TOKEN" -X POST \
   "http://localhost:8081/api/v1/reparos/ID/conclusao"
 ```
 
@@ -265,9 +264,11 @@ Erros de aplicacao usam application/problem+json (ProblemDetail), por exemplo:
 
 - 400: UUID, enum, JSON ou campos invalidos.
 - 401: autenticacao ausente ou invalida, tratada pelo Spring Security.
+- 403: papel, escopo/capacidade ou rota/metodo nao autorizado.
 - 404: agregado ou rota inexistente.
 - 409: regra de dominio, item duplicado, chave unica ou concorrencia.
 - 500: falha inesperada, com mensagem generica sem detalhes internos.
+- 503: canal de autorizacao operacional ausente/indisponivel; nenhuma mutacao.
 
 ### Validacao e relatorios
 

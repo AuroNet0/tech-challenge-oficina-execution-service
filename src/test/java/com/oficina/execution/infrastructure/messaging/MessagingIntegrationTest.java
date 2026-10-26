@@ -30,7 +30,14 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.*;
-import org.springframework.security.test.context.support.WithMockUser;
+import com.oficina.execution.security.JwksFixture;
+import com.oficina.execution.security.JwtTestConfiguration;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.web.context.WebApplicationContext;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.annotation.DirtiesContext;
@@ -47,7 +54,7 @@ import tools.jackson.databind.JsonNode;
 @SpringBootTest(properties = {"execution.messaging.enabled=true", "execution.outbox.enabled=false",
         "execution.messaging.retry-delay=100ms", "execution.messaging.max-deliveries=3"})
 @AutoConfigureMockMvc
-@WithMockUser
+@Import(JwtTestConfiguration.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class MessagingIntegrationTest {
     @Container static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8.0");
@@ -80,6 +87,9 @@ class MessagingIntegrationTest {
     @Autowired DiagnosticService diagnosticService;
     @Autowired RepairService repairService;
     @Autowired MockMvc mvc;
+    @Autowired WebApplicationContext context;
+    @Autowired JwksFixture jwks;
+    @MockitoBean TechnicalAuthorizationPort authorization;
     @MockitoSpyBean OutboxRepositoryAdapter outboxAdapter;
 
     private Binding observerBinding() {
@@ -89,6 +99,12 @@ class MessagingIntegrationTest {
 
     @BeforeEach
     void setup() {
+        mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity())
+                .defaultRequest(get("/").header("Authorization", "Bearer " + jwks.token("MECANICO"))).build();
+        doAnswer(invocation -> {
+            TechnicalAuthorizationPort.Request request = invocation.getArgument(0);
+            return new TechnicalAuthorizationPort.Decision(request.usuarioId(), request.osId(), request.capability(), request.correlationId(), true);
+        }).when(authorization).decide(any());
         for (Class<?> document : List.of(DiagnosticDocument.class, RepairDocument.class,
                 ExecutionHistoryDocument.class, InboxMessageDocument.class, OutboxEventDocument.class))
             mongo.remove(new Query(), document);
@@ -155,6 +171,8 @@ class MessagingIntegrationTest {
 
     @Test
     void receivesDiagnosticStartAtomicallyAndPublishesOsCompatibleEnvelope() {
+        doThrow(new IllegalStateException("HTTP authorization unavailable")).when(authorization).decide(any());
+        assertThat(org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication()).isNull();
         var command = command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID());
         send(command);
         processed(command);
@@ -178,6 +196,7 @@ class MessagingIntegrationTest {
             assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isEqualTo(1);
             assertThat(mongo.count(new Query(), ExecutionHistoryDocument.class)).isEqualTo(1);
         });
+        verifyNoInteractions(authorization);
     }
 
     @Test
@@ -193,6 +212,7 @@ class MessagingIntegrationTest {
 
     @Test
     void startsRepairUsingTheCompletedDiagnosticAndDeduplicatesAuthorization() {
+        doThrow(new IllegalStateException("HTTP authorization unavailable")).when(authorization).decide(any());
         var diagnostic = completedDiagnostic(UUID.randomUUID(), UUID.randomUUID());
         var command = command("repair.start.v1", diagnostic.osId(), diagnostic.sagaId());
         send(command);
@@ -205,6 +225,7 @@ class MessagingIntegrationTest {
         assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isEqualTo(1);
         publisher.publishOne();
         assertThat(receiveEvent().get("eventType").asString()).isEqualTo("repair.started.v1");
+        verifyNoInteractions(authorization);
     }
 
     @Test
@@ -494,7 +515,7 @@ class MessagingIntegrationTest {
             Callable<Integer> complete = () -> {
                 barrier.await(10, TimeUnit.SECONDS);
                 return mvc.perform(post("/api/v1/diagnosticos/" + diagnostic.id() + "/conclusao")
-                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("technician")))
+                        .header("Authorization", "Bearer " + jwks.token("MECANICO")))
                         .andReturn().getResponse().getStatus();
             };
             var first = executor.submit(complete);
