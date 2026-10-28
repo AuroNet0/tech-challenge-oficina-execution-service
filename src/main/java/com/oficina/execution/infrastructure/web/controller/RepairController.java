@@ -23,6 +23,13 @@ public class RepairController {
         return RepairResponse.from(useCase.findById(id));
     }
 
+    @PostMapping("/{id}/inicio")
+    @PreAuthorize("@technicalAuthorization.repair(authentication, #id, 'REPAIR_WRITE')")
+    public RepairResponse start(@PathVariable UUID id,
+            @RequestHeader(value = "X-Correlation-Id", required = false) UUID correlationId) {
+        return RepairResponse.from(useCase.start(id, correlationId));
+    }
+
     @GetMapping
     @PreAuthorize("@technicalAuthorization.os(authentication, #osId, 'REPAIR_READ')")
     public RepairResponse findByOsId(@RequestParam UUID osId) {

@@ -23,6 +23,12 @@ public class DiagnosticRepositoryAdapter implements DiagnosticRepositoryPort {
     }
 
     @Override
+    public List<Diagnostic> findPending() {
+        return repository.findByStatusOrderByCreatedAtAscIdAsc(com.oficina.execution.domain.enums.DiagnosticStatus.PENDING)
+                .stream().map(DiagnosticMapper::toDomain).toList();
+    }
+
+    @Override
     public Optional<Diagnostic> findById(UUID id) {
         return repository.findById(id.toString()).map(DiagnosticMapper::toDomain);
     }

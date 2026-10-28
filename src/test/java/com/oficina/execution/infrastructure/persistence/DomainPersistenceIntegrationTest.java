@@ -156,6 +156,10 @@ class DomainPersistenceIntegrationTest {
     void indexesActuallyExistWithExpectedKeysAndOptions() {
         for (String collection : List.of("diagnostics", "work_orders")) {
             var indexes = mongo.indexOps(collection).getIndexInfo();
+            var queue = indexes.stream().filter(index -> index.getName().equals("queue_status_created"))
+                    .findFirst().orElseThrow();
+            assertThat(queue.getIndexFields()).extracting(field -> field.getKey())
+                    .containsExactly("status", "createdAt", "_id");
             IndexInfo unique = indexes.stream().filter(index -> index.getName().equals("unique_os")).findFirst().orElseThrow();
             assertThat(unique.isUnique()).isTrue();
             assertThat(unique.getIndexFields()).singleElement().satisfies(field -> {

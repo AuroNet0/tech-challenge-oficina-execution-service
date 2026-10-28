@@ -6,6 +6,7 @@ import java.util.Optional;
 import com.oficina.execution.infrastructure.persistence.document.DiagnosticDocument;
 
 public interface DiagnosticMongoRepository extends MongoRepository<DiagnosticDocument, String> {
+    List<DiagnosticDocument> findByStatusOrderByCreatedAtAscIdAsc(com.oficina.execution.domain.enums.DiagnosticStatus status);
     Optional<DiagnosticDocument> findByOsId(String osId);
     List<DiagnosticDocument> findBySagaId(String sagaId);
     boolean existsByOsId(String osId);

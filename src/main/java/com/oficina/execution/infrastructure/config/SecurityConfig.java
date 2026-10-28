@@ -42,9 +42,11 @@ public class SecurityConfig {
 								"/actuator/health/readiness")
 						.permitAll()
 						.requestMatchers(HttpMethod.GET, "/api/v1/diagnosticos", "/api/v1/diagnosticos/*",
-								"/api/v1/reparos", "/api/v1/reparos/*", "/api/v1/execucoes/historico").hasRole("MECANICO")
+								"/api/v1/reparos", "/api/v1/reparos/*", "/api/v1/execucoes/historico",
+								"/api/v1/execucoes/fila").hasRole("MECANICO")
 						.requestMatchers(HttpMethod.POST, "/api/v1/diagnosticos/*/itens",
-								"/api/v1/diagnosticos/*/conclusao", "/api/v1/reparos/*/conclusao").hasRole("MECANICO")
+								"/api/v1/diagnosticos/*/conclusao", "/api/v1/reparos/*/conclusao",
+								"/api/v1/diagnosticos/*/inicio", "/api/v1/reparos/*/inicio").hasRole("MECANICO")
 						.requestMatchers(HttpMethod.PATCH, "/api/v1/diagnosticos/*/observacoes",
 								"/api/v1/reparos/*/observacoes").hasRole("MECANICO")
 						.anyRequest()

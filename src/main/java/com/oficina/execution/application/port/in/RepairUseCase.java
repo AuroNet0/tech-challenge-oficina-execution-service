@@ -4,6 +4,7 @@ import java.util.UUID;
 import com.oficina.execution.domain.model.Repair;
 
 public interface RepairUseCase {
+    Repair start(UUID id, UUID correlationId);
     Repair findById(UUID id);
     Repair findByOsId(UUID osId);
     Repair updateObservacoes(UUID id, String observacoes, UUID correlationId);

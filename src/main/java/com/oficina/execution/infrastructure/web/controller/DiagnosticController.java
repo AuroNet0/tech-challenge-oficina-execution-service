@@ -24,6 +24,13 @@ public class DiagnosticController {
         return DiagnosticResponse.from(useCase.findById(id));
     }
 
+    @PostMapping("/{id}/inicio")
+    @PreAuthorize("@technicalAuthorization.diagnostic(authentication, #id, 'DIAGNOSTIC_WRITE')")
+    public DiagnosticResponse start(@PathVariable UUID id,
+            @RequestHeader(value = "X-Correlation-Id", required = false) UUID correlationId) {
+        return DiagnosticResponse.from(useCase.start(id, correlationId));
+    }
+
     @GetMapping
     @PreAuthorize("@technicalAuthorization.os(authentication, #osId, 'DIAGNOSTIC_READ')")
     public DiagnosticResponse findByOsId(@RequestParam UUID osId) {

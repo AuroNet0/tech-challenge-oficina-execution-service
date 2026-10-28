@@ -23,6 +23,12 @@ public class RepairRepositoryAdapter implements RepairRepositoryPort {
     }
 
     @Override
+    public List<Repair> findPending() {
+        return repository.findByStatusOrderByCreatedAtAscIdAsc(com.oficina.execution.domain.enums.RepairStatus.PENDING)
+                .stream().map(RepairMapper::toDomain).toList();
+    }
+
+    @Override
     public Optional<Repair> findById(UUID id) {
         return repository.findById(id.toString()).map(RepairMapper::toDomain);
     }

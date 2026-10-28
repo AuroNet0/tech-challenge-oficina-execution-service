@@ -17,6 +17,7 @@ import com.oficina.execution.application.usecase.*;
 import com.oficina.execution.domain.enums.*;
 import com.oficina.execution.domain.model.*;
 import com.oficina.execution.infrastructure.persistence.adapter.OutboxRepositoryAdapter;
+import com.oficina.execution.infrastructure.persistence.adapter.ExecutionHistoryRepositoryAdapter;
 import com.oficina.execution.infrastructure.persistence.document.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -91,6 +92,7 @@ class MessagingIntegrationTest {
     @Autowired JwksFixture jwks;
     @MockitoBean TechnicalAuthorizationPort authorization;
     @MockitoSpyBean OutboxRepositoryAdapter outboxAdapter;
+    @MockitoSpyBean ExecutionHistoryRepositoryAdapter historyAdapter;
 
     private Binding observerBinding() {
         return BindingBuilder.bind(new org.springframework.amqp.core.Queue(OBSERVER))
@@ -135,6 +137,11 @@ class MessagingIntegrationTest {
         return handler.handle(command, body(command));
     }
 
+    private void handleAndStart(CommandEnvelope command) {
+        handle(command);
+        diagnosticService.start(diagnostics.findByOsId(command.osId()).orElseThrow().id(), null);
+    }
+
     private void send(CommandEnvelope command) {
         var properties = new MessageProperties();
         properties.setContentType(MessageProperties.CONTENT_TYPE_JSON);
@@ -170,15 +177,17 @@ class MessagingIntegrationTest {
     }
 
     @Test
-    void receivesDiagnosticStartAtomicallyAndPublishesOsCompatibleEnvelope() {
+    void receivesDiagnosticPendingThenPublishesStartedOnlyOnOperationalStart() {
         doThrow(new IllegalStateException("HTTP authorization unavailable")).when(authorization).decide(any());
         assertThat(org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication()).isNull();
         var command = command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID());
         send(command);
         processed(command);
         var diagnostic = diagnostics.findByOsId(command.osId()).orElseThrow();
-        assertThat(diagnostic.status()).isEqualTo(DiagnosticStatus.IN_PROGRESS);
+        assertThat(diagnostic.status()).isEqualTo(DiagnosticStatus.PENDING);
         assertThat(history.findByOsIdOrderByCreatedAt(command.osId())).hasSize(1);
+        assertThat(event(command.osId())).isNull();
+        diagnosticService.start(diagnostic.id(), null);
         assertThat(event(command.osId()).status()).isEqualTo(OutboxStatus.PENDING);
         assertThat(publisher.publishOne()).isTrue();
         JsonNode envelope = receiveEvent();
@@ -194,7 +203,7 @@ class MessagingIntegrationTest {
         await().during(Duration.ofMillis(300)).atMost(Duration.ofSeconds(3)).untilAsserted(() -> {
             assertThat(mongo.count(new Query(), DiagnosticDocument.class)).isEqualTo(1);
             assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isEqualTo(1);
-            assertThat(mongo.count(new Query(), ExecutionHistoryDocument.class)).isEqualTo(1);
+            assertThat(mongo.count(new Query(), ExecutionHistoryDocument.class)).isEqualTo(2);
         });
         verifyNoInteractions(authorization);
     }
@@ -207,21 +216,23 @@ class MessagingIntegrationTest {
         handle(command("diagnostic.start.v1", osId, sagaId));
         assertThat(mongo.count(new Query(), InboxMessageDocument.class)).isEqualTo(2);
         assertThat(mongo.count(new Query(), DiagnosticDocument.class)).isEqualTo(1);
-        assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isEqualTo(1);
+        assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isZero();
     }
 
     @Test
-    void startsRepairUsingTheCompletedDiagnosticAndDeduplicatesAuthorization() {
+    void queuesAuthorizedRepairUsingCompletedDiagnosticAndDeduplicatesCommand() {
         doThrow(new IllegalStateException("HTTP authorization unavailable")).when(authorization).decide(any());
         var diagnostic = completedDiagnostic(UUID.randomUUID(), UUID.randomUUID());
         var command = command("repair.start.v1", diagnostic.osId(), diagnostic.sagaId());
         send(command);
         processed(command);
         var repair = repairs.findByOsId(command.osId()).orElseThrow();
-        assertThat(repair.status()).isEqualTo(RepairStatus.IN_PROGRESS);
+        assertThat(repair.status()).isEqualTo(RepairStatus.PENDING);
         assertThat(repair.diagnosticId()).isEqualTo(diagnostic.id());
         assertThat(history.findByOsIdOrderByCreatedAt(command.osId())).hasSize(1);
         handle(command("repair.start.v1", diagnostic.osId(), diagnostic.sagaId()));
+        assertThat(event(command.osId())).isNull();
+        repairService.start(repair.id(), null);
         assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isEqualTo(1);
         publisher.publishOne();
         assertThat(receiveEvent().get("eventType").asString()).isEqualTo("repair.started.v1");
@@ -238,6 +249,31 @@ class MessagingIntegrationTest {
         assertThat(inbox.findByEventId(command.eventId()).orElseThrow().status()).isEqualTo(InboxStatus.REJECTED);
         assertThat(repairs.findByOsId(command.osId())).isEmpty();
         assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isZero();
+    }
+
+    @Test
+    void queuedRepairCanBeCancelledBeforeStartAndRedeliveryCannotReopenIt() throws Exception {
+        var diagnostic = completedDiagnostic(UUID.randomUUID(), UUID.randomUUID());
+        var start = command("repair.start.v1", diagnostic.osId(), diagnostic.sagaId());
+        send(start);
+        processed(start);
+        var repair = repairs.findByOsId(diagnostic.osId()).orElseThrow();
+        mvc.perform(get("/api/v1/execucoes/fila")).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(repair.id().toString()));
+        var cancel = command("repair.cancel.v1", diagnostic.osId(), diagnostic.sagaId());
+        send(cancel);
+        processed(cancel);
+        assertThat(repairs.findById(repair.id()).orElseThrow().status()).isEqualTo(RepairStatus.CANCELLED);
+        handle(start);
+        handle(cancel);
+        handle(command("repair.start.v1", diagnostic.osId(), diagnostic.sagaId()));
+        mvc.perform(post("/api/v1/reparos/" + repair.id() + "/inicio")).andExpect(status().isConflict());
+        mvc.perform(get("/api/v1/execucoes/fila")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+        assertThat(history.findByOsIdOrderByCreatedAt(diagnostic.osId())).extracting(ExecutionHistory::eventType)
+                .containsExactly("repair.queued", "repair.cancelled.v1");
+        assertThat(mongo.findAll(OutboxEventDocument.class)).singleElement().satisfies(event ->
+                assertThat(event.eventType()).isEqualTo("repair.cancelled.v1"));
     }
 
     @ParameterizedTest
@@ -288,19 +324,19 @@ class MessagingIntegrationTest {
 
     @Test
     void transientPersistenceFailureRetriesThenProcessesExactlyOnce() {
-        doThrow(new DataAccessResourceFailureException("temporary")).doCallRealMethod().when(outboxAdapter).save(any());
+        doThrow(new DataAccessResourceFailureException("temporary")).doCallRealMethod().when(historyAdapter).save(any());
         var command = command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID());
         send(command);
         processed(command);
         assertThat(mongo.count(new Query(), DiagnosticDocument.class)).isEqualTo(1);
         assertThat(mongo.count(new Query(), InboxMessageDocument.class)).isEqualTo(1);
-        assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isEqualTo(1);
+        assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isZero();
         assertThat(mongo.count(new Query(), ExecutionHistoryDocument.class)).isEqualTo(1);
     }
 
     @Test
     void exhaustedTransientCommandRetriesReachDlqWithoutPartialState() {
-        doThrow(new DataAccessResourceFailureException("unavailable")).when(outboxAdapter).save(any());
+        doThrow(new DataAccessResourceFailureException("unavailable")).when(historyAdapter).save(any());
         var command = command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID());
         send(command);
         Message dead = rabbit.receive(RabbitMessagingConfig.DLQ, 15000);
@@ -312,12 +348,12 @@ class MessagingIntegrationTest {
     }
 
     @Test
-    void outboxInsertFailureRollsBackDiagnosticAndRepairCommandsAcrossAllCollections() {
+    void historyInsertFailureRollsBackDiagnosticAndRepairCommandsAcrossAllCollections() {
         var diagnostic = completedDiagnostic(UUID.randomUUID(), UUID.randomUUID());
         doAnswer(invocation -> {
             invocation.callRealMethod();
             throw new DataAccessResourceFailureException("after insert");
-        }).when(outboxAdapter).save(any());
+        }).when(historyAdapter).save(any());
         var startDiagnostic = command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID());
         var startRepair = command("repair.start.v1", diagnostic.osId(), diagnostic.sagaId());
         for (var command : List.of(startDiagnostic, startRepair)) {
@@ -347,13 +383,13 @@ class MessagingIntegrationTest {
         assertThat(handle(command)).isEqualTo(InboxStatus.PROCESSED);
         assertThat(mongo.count(new Query(), DiagnosticDocument.class)).isEqualTo(1);
         assertThat(mongo.count(new Query(), InboxMessageDocument.class)).isEqualTo(1);
-        assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isEqualTo(1);
+        assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isZero();
         assertThat(mongo.count(new Query(), ExecutionHistoryDocument.class)).isEqualTo(1);
     }
 
     @Test
     void concurrentPublishersOnlyAcquireOneLiveLease() throws Exception {
-        handle(command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID()));
+        handleAndStart(command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID()));
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             var first = executor.submit(publisher::publishOne);
             var second = executor.submit(publisher::publishOne);
@@ -367,7 +403,7 @@ class MessagingIntegrationTest {
     @Test
     void expiredLeaseIsRecoveredAndOldWorkerCannotUpdateOrPublishSuccess() {
         var command = command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID());
-        handle(command);
+        handleAndStart(command);
         Instant now = Instant.now();
         var old = outbox.acquire(now, Duration.ofMillis(50), 5).orElseThrow();
         Instant later = now.plusSeconds(1);
@@ -386,7 +422,7 @@ class MessagingIntegrationTest {
     @Test
     void abandonedLastAttemptBecomesFailedAndBlocksOnlyItsOwnOs() {
         var command = command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID());
-        handle(command);
+        handleAndStart(command);
         Instant now = Instant.now();
         outbox.acquire(now, Duration.ofMillis(1), 1).orElseThrow();
         assertThat(outbox.acquire(now.plusSeconds(1), Duration.ofSeconds(30), 1)).isEmpty();
@@ -395,14 +431,14 @@ class MessagingIntegrationTest {
                 "diagnostic.completed.v1", new EventPayload.Empty());
         assertThat(outbox.acquire(now.plusSeconds(2), Duration.ofSeconds(30), 5)).isEmpty();
         var other = command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID());
-        handle(other);
+        handleAndStart(other);
         assertThat(outbox.acquire(Instant.now(), Duration.ofSeconds(30), 5).orElseThrow().osId()).isEqualTo(other.osId());
     }
 
     @Test
     void failedBrokerConnectionRetriesWithSameEventIdAndEventuallyPublishes() {
         var command = command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID());
-        handle(command);
+        handleAndStart(command);
         var originalId = event(command.osId()).eventId();
         var connection = new CachingConnectionFactory("127.0.0.1", 1);
         connection.setPublisherConfirmType(CachingConnectionFactory.ConfirmType.CORRELATED);
@@ -427,7 +463,7 @@ class MessagingIntegrationTest {
 
     @Test
     void mandatoryReturnDoesNotMarkUnroutableEventPublishedAndExhaustionFails() {
-        handle(command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID()));
+        handleAndStart(command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID()));
         admin.removeBinding(observerBinding());
         var properties = new OutboxProperties(false, 1, Duration.ofMinutes(1), 1, Duration.ofMillis(1), Duration.ofMillis(1));
         try {
@@ -443,6 +479,8 @@ class MessagingIntegrationTest {
     void restCompletionsPersistOutboxAndPublishExactDecimalAndRepairContractsInOrder() throws Exception {
         var command = command("diagnostic.start.v1", UUID.randomUUID(), UUID.randomUUID());
         handle(command);
+        mvc.perform(post("/api/v1/diagnosticos/" + diagnostics.findByOsId(command.osId()).orElseThrow().id() + "/inicio"))
+                .andExpect(status().isOk());
         var diagnostic = diagnostics.findByOsId(command.osId()).orElseThrow();
         diagnostics.save(diagnostic.addItem(item()));
         mvc.perform(post("/api/v1/diagnosticos/" + diagnostic.id() + "/conclusao"))
@@ -464,6 +502,7 @@ class MessagingIntegrationTest {
         var startRepair = command("repair.start.v1", command.osId(), command.sagaId());
         handle(startRepair);
         var repair = repairs.findByOsId(command.osId()).orElseThrow();
+        mvc.perform(post("/api/v1/reparos/" + repair.id() + "/inicio")).andExpect(status().isOk());
         mvc.perform(post("/api/v1/reparos/" + repair.id() + "/conclusao")).andExpect(status().isOk());
         publisher.publishOne();
         assertThat(receiveEvent().get("eventType").asString()).isEqualTo("repair.started.v1");
@@ -473,6 +512,8 @@ class MessagingIntegrationTest {
         assertThat(repairCompleted.get("payload").get("repairId").asString()).isEqualTo(repair.id().toString());
         mvc.perform(post("/api/v1/reparos/" + repair.id() + "/conclusao")).andExpect(status().isConflict());
         assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isEqualTo(4);
+        mvc.perform(get("/api/v1/execucoes/fila")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
     }
 
     @Test

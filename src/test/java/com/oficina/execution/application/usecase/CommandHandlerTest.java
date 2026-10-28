@@ -49,14 +49,14 @@ class CommandHandlerTest {
     }
 
     @Test
-    void createsAndStartsDiagnosticAndProcessesInbox() {
+    void queuesDiagnosticAndProcessesInboxWithoutStartedEvent() {
         var command = command("diagnostic.start.v1");
         when(diagnostics.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         assertThat(handler.handle(command, "{}")).isEqualTo(InboxStatus.PROCESSED);
-        verify(diagnostics).save(argThat(value -> value.status() == DiagnosticStatus.IN_PROGRESS && value.observacoes().equals("nota")));
+        verify(diagnostics).save(argThat(value -> value.status() == DiagnosticStatus.PENDING && value.observacoes().equals("nota")));
         verify(inbox).insert(argThat(value -> value.status() == InboxStatus.RECEIVED));
         verify(inbox).update(argThat(value -> value.status() == InboxStatus.PROCESSED && value.processedAt() != null));
-        verify(events).record(any(), eq("Diagnostic"), eq(osId), eq(sagaId), eq(correlationId), eq("diagnostic.started.v1"), any());
+        verifyNoInteractions(events);
     }
 
     @Test
@@ -89,8 +89,8 @@ class CommandHandlerTest {
         when(diagnostics.findByOsId(osId)).thenReturn(Optional.of(diagnostic));
         when(repairs.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         assertThat(handler.handle(command("repair.start.v1"), "{}")).isEqualTo(InboxStatus.PROCESSED);
-        verify(repairs).save(argThat(value -> value.status() == RepairStatus.IN_PROGRESS && value.diagnosticId().equals(diagnostic.id())));
-        verify(events).record(any(), eq("Repair"), eq(osId), eq(sagaId), eq(correlationId), eq("repair.started.v1"), any());
+        verify(repairs).save(argThat(value -> value.status() == RepairStatus.PENDING && value.diagnosticId().equals(diagnostic.id())));
+        verifyNoInteractions(events);
     }
 
     @Test

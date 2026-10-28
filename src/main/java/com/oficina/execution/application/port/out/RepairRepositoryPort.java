@@ -6,6 +6,7 @@ import java.util.Optional;
 import com.oficina.execution.domain.model.Repair;
 
 public interface RepairRepositoryPort {
+    List<Repair> findPending();
     Repair save(Repair value);
     Optional<Repair> findById(UUID id);
     Optional<Repair> findByOsId(UUID osId);

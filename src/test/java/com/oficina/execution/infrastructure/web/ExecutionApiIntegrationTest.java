@@ -19,6 +19,8 @@ import com.oficina.execution.domain.enums.*;
 import com.oficina.execution.domain.model.*;
 import com.oficina.execution.infrastructure.persistence.adapter.DiagnosticRepositoryAdapter;
 import com.oficina.execution.infrastructure.persistence.adapter.ExecutionHistoryRepositoryAdapter;
+import com.oficina.execution.infrastructure.persistence.adapter.RepairRepositoryAdapter;
+import com.oficina.execution.infrastructure.persistence.adapter.OutboxRepositoryAdapter;
 import com.oficina.execution.infrastructure.persistence.document.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -72,6 +74,8 @@ class ExecutionApiIntegrationTest {
     @Autowired RequestMappingHandlerMapping requestMappingHandlerMapping;
     @MockitoSpyBean DiagnosticRepositoryAdapter diagnosticAdapter;
     @MockitoSpyBean ExecutionHistoryRepositoryAdapter historyAdapter;
+    @MockitoSpyBean RepairRepositoryAdapter repairAdapter;
+    @MockitoSpyBean OutboxRepositoryAdapter outboxAdapter;
 
     @BeforeEach
     void clean() {
@@ -84,10 +88,161 @@ class ExecutionApiIntegrationTest {
         mongo.remove(new Query(), DiagnosticDocument.class);
         mongo.remove(new Query(), RepairDocument.class);
         mongo.remove(new Query(), ExecutionHistoryDocument.class);
+        mongo.remove(new Query(), OutboxEventDocument.class);
+        mongo.remove(new Query(), InboxMessageDocument.class);
     }
 
     private Diagnostic diagnostic() {
         return diagnostics.save(Diagnostic.create(UUID.randomUUID(), UUID.randomUUID()).start());
+    }
+
+    @Test
+    void queueOrdersBothTypesFiltersUnauthorizedAndExcludesNonPending() throws Exception {
+        var oldest = Diagnostic.create(UUID.randomUUID(), UUID.randomUUID());
+        oldest = diagnostics.save(new Diagnostic(oldest.id(), oldest.osId(), oldest.sagaId(), oldest.status(),
+                null, oldest.items(), Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-01-01T00:00:00Z"), null, null));
+        var pendingRepair = repair(false);
+        var hidden = diagnostics.save(Diagnostic.create(UUID.randomUUID(), UUID.randomUUID()));
+        diagnostic();
+        repair(true);
+        diagnostics.save(Diagnostic.create(UUID.randomUUID(), UUID.randomUUID()).start().fail("falha"));
+        doAnswer(invocation -> {
+            TechnicalAuthorizationPort.Request request = invocation.getArgument(0);
+            return new TechnicalAuthorizationPort.Decision(request.usuarioId(), request.osId(), request.capability(),
+                    request.correlationId(), !request.osId().equals(hidden.osId()));
+        }).when(authorization).decide(any());
+        mvc.perform(get("/api/v1/execucoes/fila")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].id").value(oldest.id().toString()))
+                .andExpect(jsonPath("$[0].type").value("DIAGNOSTIC"))
+                .andExpect(jsonPath("$[0].status").value("PENDING"))
+                .andExpect(jsonPath("$[1].id").value(pendingRepair.id().toString()))
+                .andExpect(jsonPath("$[1].type").value("REPAIR"))
+                .andExpect(jsonPath("$[0].observacoes").doesNotExist())
+                .andExpect(jsonPath("$[0].items").doesNotExist());
+        mvc.perform(get("/api/v1/diagnosticos/" + hidden.id())).andExpect(status().isForbidden());
+        doThrow(new IllegalStateException("upstream unavailable")).when(authorization).decide(any());
+        mvc.perform(get("/api/v1/execucoes/fila")).andExpect(status().isServiceUnavailable());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"diagnosticos", "reparos"})
+    void authorizedStartIsPersistedWithHistoryOutboxAndCannotRepeat(String path) throws Exception {
+        UUID id;
+        UUID osId;
+        if (path.equals("diagnosticos")) {
+            var pending = diagnostics.save(Diagnostic.create(UUID.randomUUID(), UUID.randomUUID()));
+            id = pending.id();
+            osId = pending.osId();
+        } else {
+            var pending = repair(false);
+            id = pending.id();
+            osId = pending.osId();
+        }
+        UUID correlation = UUID.randomUUID();
+        String base = "/api/v1/" + path + "/" + id;
+        mvc.perform(post(base + "/inicio").header("X-Correlation-Id", correlation))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("IN_PROGRESS"))
+                .andExpect(jsonPath("$.version").value(1));
+        mvc.perform(get(base)).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("IN_PROGRESS"));
+        mvc.perform(post(base + "/inicio")).andExpect(status().isConflict());
+        mvc.perform(get("/api/v1/execucoes/fila")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+        assertThat(history.findByOsIdOrderByCreatedAt(osId)).singleElement().satisfies(entry ->
+                assertThat(entry.correlationId()).isEqualTo(correlation));
+        assertThat(mongo.findAll(OutboxEventDocument.class)).singleElement().satisfies(event -> {
+            assertThat(event.correlationId()).isEqualTo(correlation.toString());
+            assertThat(event.eventType()).endsWith(".started.v1");
+        });
+        verify(authorization, atLeastOnce()).decide(argThat(request ->
+                request.usuarioId().equals(JwksFixture.USER) && request.osId().equals(osId)
+                        && request.capability().name().endsWith("_WRITE")));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"diagnosticos", "reparos"})
+    void concurrentStartsCommitExactlyOneTransitionHistoryAndEvent(String path) throws Exception {
+        UUID id = path.equals("diagnosticos")
+                ? diagnostics.save(Diagnostic.create(UUID.randomUUID(), UUID.randomUUID())).id() : repair(false).id();
+        var barrier = new CyclicBarrier(2);
+        if (path.equals("diagnosticos")) {
+            doAnswer(invocation -> {
+                barrier.await(20, TimeUnit.SECONDS);
+                return invocation.callRealMethod();
+            }).when(diagnosticAdapter).save(any());
+        } else {
+            doAnswer(invocation -> {
+                barrier.await(20, TimeUnit.SECONDS);
+                return invocation.callRealMethod();
+            }).when(repairAdapter).save(any());
+        }
+        var otherClaims = jwks.claims("MECANICO");
+        otherClaims.put("sub", UUID.randomUUID().toString());
+        String otherToken = jwks.sign(otherClaims, jwks.key, com.nimbusds.jose.JWSAlgorithm.RS256, jwks.key.getKeyID());
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var first = executor.submit(() -> mvc.perform(post("/api/v1/" + path + "/" + id + "/inicio")
+                    .header("Authorization", "Bearer " + jwks.token("MECANICO"))).andReturn().getResponse().getStatus());
+            var second = executor.submit(() -> mvc.perform(post("/api/v1/" + path + "/" + id + "/inicio")
+                    .header("Authorization", "Bearer " + otherToken)).andReturn().getResponse().getStatus());
+            assertThat(List.of(first.get(30, TimeUnit.SECONDS), second.get(30, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(200, 409);
+        }
+        assertThat(mongo.count(new Query(), ExecutionHistoryDocument.class)).isEqualTo(1);
+        assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isEqualTo(1);
+    }
+
+    @Test
+    void startFailuresRollbackBothAggregatesHistoryAndOutbox() throws Exception {
+        var pendingDiagnostic = diagnostics.save(Diagnostic.create(UUID.randomUUID(), UUID.randomUUID()));
+        var pendingRepair = repair(false);
+        for (String failure : List.of("history", "outbox")) {
+            if (failure.equals("history")) {
+                doAnswer(invocation -> {
+                    invocation.callRealMethod();
+                    throw new IllegalStateException("failure after insert");
+                }).when(historyAdapter).save(any());
+            } else {
+                doCallRealMethod().when(historyAdapter).save(any());
+                doAnswer(invocation -> {
+                    invocation.callRealMethod();
+                    throw new IllegalStateException("failure after insert");
+                }).when(outboxAdapter).save(any());
+            }
+            mvc.perform(post("/api/v1/diagnosticos/" + pendingDiagnostic.id() + "/inicio"))
+                    .andExpect(status().isInternalServerError());
+            mvc.perform(post("/api/v1/reparos/" + pendingRepair.id() + "/inicio"))
+                    .andExpect(status().isInternalServerError());
+            assertThat(diagnostics.findById(pendingDiagnostic.id())).contains(pendingDiagnostic);
+            assertThat(repairs.findById(pendingRepair.id())).contains(pendingRepair);
+            assertThat(mongo.count(new Query(), ExecutionHistoryDocument.class)).isZero();
+            assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isZero();
+        }
+    }
+
+    @Test
+    void queueAndStartRequireAuthenticatedMechanicAndCurrentCapability() throws Exception {
+        var pending = diagnostics.save(Diagnostic.create(UUID.randomUUID(), UUID.randomUUID()));
+        var pendingRepair = repair(false);
+        var anonymous = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
+        anonymous.perform(get("/api/v1/execucoes/fila")).andExpect(status().isUnauthorized());
+        for (String base : List.of("/api/v1/diagnosticos/" + pending.id(), "/api/v1/reparos/" + pendingRepair.id())) {
+            anonymous.perform(post(base + "/inicio")).andExpect(status().isUnauthorized());
+            mvc.perform(post(base + "/inicio").header("Authorization", "Bearer " + jwks.token("GERENTE")))
+                    .andExpect(status().isForbidden());
+        }
+        mvc.perform(get("/api/v1/execucoes/fila").header("Authorization", "Bearer " + jwks.token("CLIENTE")))
+                .andExpect(status().isForbidden());
+        doAnswer(invocation -> {
+            TechnicalAuthorizationPort.Request request = invocation.getArgument(0);
+            return new TechnicalAuthorizationPort.Decision(request.usuarioId(), request.osId(), request.capability(),
+                    request.correlationId(), request.capability().name().endsWith("_READ"));
+        }).when(authorization).decide(any());
+        mvc.perform(post("/api/v1/diagnosticos/" + pending.id() + "/inicio")).andExpect(status().isForbidden());
+        mvc.perform(post("/api/v1/reparos/" + pendingRepair.id() + "/inicio")).andExpect(status().isForbidden());
+        mvc.perform(post("/api/v1/diagnosticos/" + UUID.randomUUID() + "/inicio")).andExpect(status().isNotFound());
+        assertThat(diagnostics.findById(pending.id())).contains(pending);
+        assertThat(repairs.findById(pendingRepair.id())).contains(pendingRepair);
+        assertThat(mongo.count(new Query(), OutboxEventDocument.class)).isZero();
     }
 
     private DiagnosticItem item() {
@@ -323,13 +478,14 @@ class ExecutionApiIntegrationTest {
         assertThat(paths).isEqualTo(Set.of("/api/v1/diagnosticos", "/api/v1/diagnosticos/{id}",
                 "/api/v1/diagnosticos/{id}/itens", "/api/v1/diagnosticos/{id}/observacoes", "/api/v1/diagnosticos/{id}/conclusao",
                 "/api/v1/reparos", "/api/v1/reparos/{id}", "/api/v1/reparos/{id}/observacoes", "/api/v1/reparos/{id}/conclusao",
-                "/api/v1/execucoes/historico"));
+                "/api/v1/execucoes/historico", "/api/v1/execucoes/fila",
+                "/api/v1/diagnosticos/{id}/inicio", "/api/v1/reparos/{id}/inicio"));
         for (String path : List.of("diagnosticos", "reparos")) {
             mvc.perform(post("/api/v1/" + path)).andExpect(status().isForbidden());
             mvc.perform(patch("/api/v1/" + path + "/" + UUID.randomUUID() + "/status")
                     .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"IN_PROGRESS\"}")).andExpect(status().isForbidden());
         }
-        for (String operation : List.of("inicio", "autorizacao", "start", "authorizeAndStart")) {
+        for (String operation : List.of("autorizacao", "start", "authorizeAndStart")) {
             mvc.perform(post("/api/v1/reparos/" + UUID.randomUUID() + "/" + operation)).andExpect(status().isForbidden());
         }
     }

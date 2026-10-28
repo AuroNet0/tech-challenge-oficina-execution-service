@@ -30,6 +30,18 @@ public class DiagnosticService implements DiagnosticUseCase {
     }
 
     @Override
+    @Transactional
+    public Diagnostic start(UUID id, UUID correlationId) {
+        Diagnostic value = findById(id).start();
+        UUID correlation = correlationId != null ? correlationId : events.correlation(value.osId());
+        Diagnostic started = save(value, "diagnostic.started.v1",
+                "Diagnostico iniciado pelo mecanico", correlation);
+        events.record(started.id(), "Diagnostic", started.osId(), started.sagaId(), correlation,
+                "diagnostic.started.v1", new EventPayload.Empty());
+        return started;
+    }
+
+    @Override
     public Diagnostic findByOsId(UUID osId) {
         return diagnostics.findByOsId(osId).orElseThrow(() -> new ResourceNotFoundException("Diagnostic", osId));
     }

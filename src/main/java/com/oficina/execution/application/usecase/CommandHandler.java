@@ -80,11 +80,9 @@ public class CommandHandler {
         }
         var payload = (CommandPayload.DiagnosticStart) command.payload();
         Diagnostic diagnostic = Diagnostic.create(command.osId(), command.sagaId())
-                .updateObservacoes(payload.observacoes()).start();
+                .updateObservacoes(payload.observacoes());
         diagnostic = diagnostics.save(diagnostic);
-        recordHistory(command, diagnostic.id(), null, "diagnostic.started.v1", "Diagnostico iniciado");
-        events.record(diagnostic.id(), "Diagnostic", command.osId(), command.sagaId(), command.correlationId(),
-                "diagnostic.started.v1", new EventPayload.Empty());
+        recordHistory(command, diagnostic.id(), null, "diagnostic.queued", "Diagnostico aguardando inicio operacional");
     }
 
     private void startRepair(CommandEnvelope command) {
@@ -93,16 +91,15 @@ public class CommandHandler {
         requireSaga(diagnostic.sagaId(), command);
         if (diagnostic.status() != DiagnosticStatus.COMPLETED)
             throw new DomainException("Diagnostico deve estar concluido");
-        Repair repair = repairs.findByOsId(command.osId()).orElseGet(() ->
+        var existing = repairs.findByOsId(command.osId());
+        Repair repair = existing.orElseGet(() ->
                 Repair.create(command.osId(), command.sagaId(), diagnostic.id()));
         requireSaga(repair.sagaId(), command);
         if (!repair.diagnosticId().equals(diagnostic.id()))
             throw new InvalidCommandException("Reparo referencia outro diagnostico");
-        if (repair.status() == RepairStatus.IN_PROGRESS || repair.status() == RepairStatus.COMPLETED) return;
-        repair = repairs.save(repair.authorizeAndStart());
-        recordHistory(command, diagnostic.id(), repair.id(), "repair.started.v1", "Reparo autorizado pelo OS Service e iniciado");
-        events.record(repair.id(), "Repair", command.osId(), command.sagaId(), command.correlationId(),
-                "repair.started.v1", new EventPayload.Empty());
+        if (existing.isPresent()) return;
+        repair = repairs.save(repair);
+        recordHistory(command, diagnostic.id(), repair.id(), "repair.queued", "Reparo autorizado pelo OS Service aguardando inicio operacional");
     }
 
     private void cancelRepair(CommandEnvelope command) {

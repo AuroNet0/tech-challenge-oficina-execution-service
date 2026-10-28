@@ -29,6 +29,18 @@ public class RepairService implements RepairUseCase {
     }
 
     @Override
+    @Transactional
+    public Repair start(UUID id, UUID correlationId) {
+        Repair value = findById(id).authorizeAndStart();
+        UUID correlation = correlationId != null ? correlationId : events.correlation(value.osId());
+        Repair started = save(value, "repair.started.v1",
+                "Reparo iniciado pelo mecanico", correlation);
+        events.record(started.id(), "Repair", started.osId(), started.sagaId(), correlation,
+                "repair.started.v1", new EventPayload.Empty());
+        return started;
+    }
+
+    @Override
     public Repair findByOsId(UUID osId) {
         return repairs.findByOsId(osId).orElseThrow(() -> new ResourceNotFoundException("Repair", osId));
     }

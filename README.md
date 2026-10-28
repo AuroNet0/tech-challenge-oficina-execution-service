@@ -6,7 +6,7 @@ Microsservico Execution Service do Tech Challenge FIAP - Fase 4, etapa 6.4.
 
 O Execution Service implementa o dominio de diagnostico tecnico e execucao dos reparos de uma ordem de servico, com persistencia propria MongoDB. O bootstrap de Spring Boot, seguranca inicial, OpenAPI, health checks e Docker permanece preservado.
 
-A API REST permite consultar e atualizar tecnicamente diagnosticos e reparos existentes. Comandos RabbitMQ do OS Service iniciam diagnosticos e autorizam reparos. Inbox, estado tecnico, historico e Outbox sao persistidos atomicamente no MongoDB; eventos de resultado sao publicados posteriormente pela Outbox. A Saga continua exclusivamente no OS Service. Consulte [docs/messaging.md](docs/messaging.md) para contratos, operacao e execucao integrada.
+A API REST permite consultar e atualizar tecnicamente diagnosticos e reparos existentes. Comandos RabbitMQ do OS Service disponibilizam trabalhos PENDING na fila operacional; um mecanico autorizado inicia explicitamente via REST. Inbox, estado tecnico, historico e Outbox sao persistidos atomicamente no MongoDB; eventos sao publicados posteriormente pela Outbox. A Saga continua exclusivamente no OS Service. Consulte [fila operacional 9.1.2](docs/operational-queue-9.1.2.md) para inspecao, estados, endpoints, exemplos, autorizacao e impacto no E2E 8.3.5, e [docs/messaging.md](docs/messaging.md) para contratos de mensagens.
 
 ## Responsabilidades
 
@@ -112,7 +112,7 @@ A etapa 8.3.3 permite acesso sem JWT humano apenas aos GETs de probes, sem detal
 - `/actuator/health/liveness`
 - `/actuator/health/readiness`
 
-Operacoes tecnicas exigem Bearer JWT RS256 valido, ROLE_MECANICO e capacidade especifica na OS atribuida. Basic nao e aceito. O Execution resolve o osId do agregado e consulta uma porta de autorizacao; como o OS ainda nao oferece canal interno confiavel/capacidades de escrita, o adapter produtivo mantem essas operacoes bloqueadas (503). CLIENTE, ATENDENTE e GERENTE nao recebem acesso tecnico pelo papel; demais rotas/metodos sao negados por padrao. RabbitMQ continua independente de JWT humano.
+Operacoes tecnicas exigem Bearer JWT RS256 valido, ROLE_MECANICO e capacidade especifica na OS atribuida. Basic nao e aceito. O Execution resolve o osId do agregado e consulta uma porta de autorizacao. O perfil mtls usa o canal interno do OS com certificado de servico e JWT humano; sem o perfil/canal configurado, o adapter padrao bloqueia operacoes (503). CLIENTE, ATENDENTE e GERENTE nao recebem acesso tecnico pelo papel; demais rotas/metodos sao negados por padrao. RabbitMQ continua independente de JWT humano.
 
 Arquitetura, matriz completa, contrato proposto, limitacoes e evidencias: [autorizacao 8.3.3](docs/security/execution-authorization-8.3.3.md).
 
@@ -150,7 +150,7 @@ A cobertura minima configurada e de 80% por linhas de codigo. A unica exclusao e
 
 - Diagnostic nasce PENDING; start permite PENDING -> IN_PROGRESS; complete e fail permitem IN_PROGRESS -> COMPLETED ou FAILED. Cancelamento e permitido somente em PENDING ou IN_PROGRESS. FAILED preserva a falha e a justificativa, sem conversao implicita para CANCELLED. COMPLETED, CANCELLED e FAILED nao aceitam edicao.
 - Diagnostico concluido exige pelo menos um item valido. Itens so podem ser adicionados durante IN_PROGRESS; itemId deve ser unico apos strip. Quantidade deve ser positiva e precoPrevisto nao negativo. Descricao e identificador nao podem estar vazios. Nao ha calculo de orcamento.
-- Repair nasce PENDING. authorizeAndStart representa explicitamente a autorizacao recebida por repair.start.v1: PENDING -> IN_PROGRESS. Nao existe setter generico de status nem operacao start sem autorizacao. complete e fail exigem IN_PROGRESS.
+- Repair nasce PENDING quando repair.start.v1 autoriza e disponibiliza o trabalho. O inicio operacional REST autorizado aplica authorizeAndStart: PENDING -> IN_PROGRESS. complete e fail exigem IN_PROGRESS.
 - cancel confirma cancelamento apenas em PENDING. cancellationOutcome distingue CANCELLATION_ALLOWED (PENDING), CONFIRMED (CANCELLED), MANUAL_INTERVENTION_REQUIRED (IN_PROGRESS ou FAILED) e COMPENSATION_FAILED (COMPLETED), sem alterar o estado fisico. COMPLETED e CANCELLED sao terminais. A confirmacao de compensacao de trabalho iniciado depende de politica e evidencias futuras; nao e simulada nesta etapa.
 - Operacoes retornam novas instancias; o chamador deve utilizar o retorno, inclusive de save (que devolve a nova version). Os construtores validam snapshots para reconstituicao; os futuros casos de uso devem utilizar as operacoes de dominio para transicoes e validar a origem da autorizacao.
 - ExecutionHistory e imutavel e sua persistencia usa insert: salvar novamente o mesmo id falha, sem sobrescrever o registro. Referencias tecnicas sao opcionais para notas da OS; futuros casos de uso devem informa-las quando aplicaveis. Descricoes devem conter somente informacao tecnica necessaria, sem dados pessoais, credenciais ou outros dados sensiveis.
@@ -194,11 +194,11 @@ O script docker/mongo-entrypoint.sh gera uma chave interna em /data/db/.replica-
 
 O membro anuncia mongodb:27017. A URI usa replicaSet=rs0 e directConnection=true para funcionar tanto no Compose quanto com a aplicacao executada no host via porta publicada. Esse replica set de um membro e destinado ao desenvolvimento, sem alta disponibilidade. Arquivos shell sao versionados com LF para funcionar tambem em checkouts Windows.
 
-Nao foram implementados outro orquestrador de Saga, Billing, pagamentos, infraestrutura cloud ou alteracao direta de status da OS. Nao ha dados ficticios permanentes. JWT e politica HTTP foram acrescentados na etapa 8.3.3; a dependencia de autorizacao distribuida com OS permanece bloqueada.
+Nao foram implementados outro orquestrador de Saga, Billing, pagamentos, infraestrutura cloud ou alteracao direta de status da OS. Nao ha dados ficticios permanentes. JWT e politica HTTP foram acrescentados na etapa 8.3.3; a fila reutiliza a autorizacao distribuida atual com OS.
 
 ## API REST tecnica
 
-Todos os endpoints abaixo exigem JWT RS256, papel MECANICO e autorizacao atual da OS para a capacidade solicitada. As respostas de sucesso descritas dependem dessa decisao; atualmente o canal produtivo permanece bloqueado. Os exemplos Bearer ilustram o contrato HTTP, sem ativar a integracao OS nem contornar a autorizacao.
+Todos os endpoints abaixo exigem JWT RS256, papel MECANICO e autorizacao atual da OS para a capacidade solicitada. As respostas de sucesso dependem dessa decisao e da configuracao do canal mtls existente. Os exemplos Bearer ilustram o contrato HTTP, sem ativar a integracao OS nem contornar a autorizacao.
 
 | Metodo | Endpoint | Operacao |
 | --- | --- | --- |
@@ -212,10 +212,13 @@ Todos os endpoints abaixo exigem JWT RS256, papel MECANICO e autorizacao atual d
 | PATCH | /api/v1/reparos/{id}/observacoes | Atualizar observacoes em PENDING ou IN_PROGRESS |
 | POST | /api/v1/reparos/{id}/conclusao | Concluir somente IN_PROGRESS |
 | GET | /api/v1/execucoes/historico?osId={uuid} | Historico cronologico, ou lista vazia |
+| GET | /api/v1/execucoes/fila | Pendencias autorizadas, mais antigas primeiro |
+| POST | /api/v1/diagnosticos/{id}/inicio | Iniciar diagnostico PENDING (DIAGNOSTIC_WRITE) |
+| POST | /api/v1/reparos/{id}/inicio | Iniciar reparo PENDING (REPAIR_WRITE) |
 
 Consultas de agregado retornam um objeto e HTTP 404 quando ausente, inclusive busca por osId. Alteracoes bem-sucedidas retornam HTTP 200 e o agregado atualizado, incluindo version. Historico retorna uma lista. Campos de resposta incluem os identificadores, estado, observacoes e timestamps; itens retornam quantidade e precoPrevisto como strings decimais, sem arredondamento.
 
-A API opera somente sobre agregados existentes. Nao existem endpoints de criacao, inicio, autorizacao, cancelamento ou alteracao generica de status. A criacao e o inicio dependem de diagnostic.start.v1 e repair.start.v1. authorizeAndStart nao e exposto por HTTP; PENDING nao pode ser concluido como reparo autorizado.
+A API opera somente sobre agregados existentes. A criacao depende de diagnostic.start.v1 e repair.start.v1; o inicio operacional exige os endpoints /inicio, sem corpo ou usuarioId. Nao existem endpoints de criacao, autorizacao do OS, cancelamento ou alteracao generica de status. PENDING nao pode ser concluido. O perfil mtls reutiliza o canal de autorizacao atual do OS; sem esse canal o adapter padrao retorna 503.
 
 ### Adicionar item
 

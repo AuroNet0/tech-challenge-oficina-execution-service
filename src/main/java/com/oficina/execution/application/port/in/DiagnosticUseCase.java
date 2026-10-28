@@ -5,6 +5,7 @@ import com.oficina.execution.domain.model.Diagnostic;
 import com.oficina.execution.domain.model.DiagnosticItem;
 
 public interface DiagnosticUseCase {
+    Diagnostic start(UUID id, UUID correlationId);
     Diagnostic findById(UUID id);
     Diagnostic findByOsId(UUID osId);
     Diagnostic addItem(UUID id, DiagnosticItem item, UUID correlationId);

@@ -1,5 +1,9 @@
 # Mensageria do Execution Service — etapa 6.4
 
+## Fila operacional 9.1.2
+
+Os comandos diagnostic.start.v1 e repair.start.v1 agora registram PENDING; os eventos started sao gravados somente no inicio REST autorizado. Esta regra substitui referencias historicas a inicio automatico neste documento. Contratos, Inbox, Outbox, retry e DLQ permanecem os mesmos. Consulte [fila operacional](operational-queue-9.1.2.md) e adapte o E2E 8.3.5 para chamar /inicio antes de aguardar started.
+
 ## Referencias e compatibilidade
 
 Referencias da branch homolog do OS Service, consultadas nesta implementacao:
