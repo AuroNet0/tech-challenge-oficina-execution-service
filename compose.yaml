@@ -1,0 +1,75 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    profiles: ["local-broker"]
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-execution}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-execution_local}
+    ports:
+      - "${EXECUTION_RABBITMQ_PORT:-5673}:5672"
+      - "${EXECUTION_RABBITMQ_MANAGEMENT_PORT:-15673}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+  mongodb:
+    image: mongo:8.0
+    container_name: oficina-execution-mongodb
+    entrypoint: ["bash", "/opt/mongo/mongo-entrypoint.sh"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME:-oficina_execution}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-oficina_execution}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-oficina_execution}
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongodb-data:/data/db
+      - ./docker/mongo-entrypoint.sh:/opt/mongo/mongo-entrypoint.sh:ro
+      - ./docker/mongo-healthcheck.js:/opt/mongo/mongo-healthcheck.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --username \"$${MONGO_INITDB_ROOT_USERNAME}\" --password \"$${MONGO_INITDB_ROOT_PASSWORD}\" --authenticationDatabase admin /opt/mongo/mongo-healthcheck.js"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  execution-service:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    build:
+      context: .
+    container_name: oficina-execution-service
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      MONGO_HOST: mongodb
+      EXECUTION_JWT_ISSUER: ${EXECUTION_JWT_ISSUER:?Configure EXECUTION_JWT_ISSUER}
+      EXECUTION_JWT_AUDIENCE: ${EXECUTION_JWT_AUDIENCE:?Configure EXECUTION_JWT_AUDIENCE}
+      EXECUTION_JWT_JWKS_URI: ${EXECUTION_JWT_JWKS_URI:?Configure EXECUTION_JWT_JWKS_URI}
+      MONGO_PORT: 27017
+      MONGO_DATABASE: ${MONGO_DATABASE:-oficina_execution}
+      MONGO_USERNAME: ${MONGO_USERNAME:-oficina_execution}
+      MONGO_PASSWORD: ${MONGO_PASSWORD:-oficina_execution}
+      MONGO_AUTH_DATABASE: admin
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-host.docker.internal}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5673}
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-execution}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-execution_local}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  rabbitmq-data:
+  mongodb-data:

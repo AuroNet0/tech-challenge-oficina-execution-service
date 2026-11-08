@@ -1,0 +1,123 @@
+name: oficina-integration-65
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: oficina_os
+      POSTGRES_USER: integration
+      POSTGRES_PASSWORD: integration_only
+    volumes:
+      - integration-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U integration -d oficina_os"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mongodb:
+    image: mongo:8.0
+    entrypoint: ["bash", "/opt/mongo/mongo-entrypoint.sh"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: integration
+      MONGO_INITDB_ROOT_PASSWORD: integration_only
+      MONGO_INITDB_DATABASE: oficina_execution
+    volumes:
+      - integration-mongo:/data/db
+      - ../docker/mongo-entrypoint.sh:/opt/mongo/mongo-entrypoint.sh:ro
+      - ../docker/mongo-healthcheck.js:/opt/mongo/mongo-healthcheck.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet -u integration -p integration_only --authenticationDatabase admin /opt/mongo/mongo-healthcheck.js"]
+      interval: 2s
+      timeout: 5s
+      retries: 40
+      start_period: 10s
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: integration
+      RABBITMQ_DEFAULT_PASS: integration_only
+    ports:
+      - "127.0.0.1:${INTEGRATION_RABBIT_MANAGEMENT_PORT:-18572}:15672"
+    volumes:
+      - integration-rabbit:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  os-service:
+    build:
+      context: ../../tech-challenge-oficina-os-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: oficina_os
+      DB_USERNAME: integration
+      DB_PASSWORD: integration_only
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: integration
+      RABBITMQ_PASSWORD: integration_only
+      SPRING_SECURITY_USER_NAME: integration
+      SPRING_SECURITY_USER_PASSWORD: integration_only
+      OUTBOX_PUBLISHER_FIXED_DELAY: 1s
+      OUTBOX_PUBLISHER_INITIAL_BACKOFF: 1s
+      OUTBOX_PUBLISHER_MAX_BACKOFF: 5s
+      OUTBOX_PUBLISHER_MAX_ATTEMPTS: 20
+    ports:
+      - "127.0.0.1:${INTEGRATION_OS_PORT:-18080}:8080"
+    volumes:
+      - ./healthcheck.sh:/opt/integration/healthcheck.sh:ro
+    healthcheck:
+      test: ["CMD", "bash", "/opt/integration/healthcheck.sh"]
+      interval: 2s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
+  execution-service:
+    build:
+      context: ..
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      MONGO_HOST: mongodb
+      MONGO_PORT: 27017
+      MONGO_DATABASE: oficina_execution
+      MONGO_USERNAME: integration
+      MONGO_PASSWORD: integration_only
+      MONGO_AUTH_DATABASE: admin
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: integration
+      RABBITMQ_PASSWORD: integration_only
+      SPRING_SECURITY_USER_NAME: integration
+      SPRING_SECURITY_USER_PASSWORD: integration_only
+      OUTBOX_FIXED_DELAY: 1s
+      OUTBOX_INITIAL_BACKOFF: 1s
+      OUTBOX_MAX_BACKOFF: 5s
+      OUTBOX_MAX_ATTEMPTS: 20
+    ports:
+      - "127.0.0.1:${INTEGRATION_EXECUTION_PORT:-18081}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health/readiness"]
+      interval: 2s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
+volumes:
+  integration-postgres:
+  integration-mongo:
+  integration-rabbit:

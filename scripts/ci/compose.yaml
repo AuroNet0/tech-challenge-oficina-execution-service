@@ -1,0 +1,52 @@
+services:
+  mongodb:
+    image: mongo:8.0
+    entrypoint: [bash, /opt/mongo/mongo-entrypoint.sh]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ci
+      MONGO_INITDB_ROOT_PASSWORD: ${CI_PASSWORD:?Set ephemeral CI_PASSWORD}
+      MONGO_INITDB_DATABASE: oficina_execution
+    volumes:
+      - mongo-data:/data/db
+      - ../../docker/mongo-entrypoint.sh:/opt/mongo/mongo-entrypoint.sh:ro
+      - ../../docker/mongo-healthcheck.js:/opt/mongo/mongo-healthcheck.js:ro
+    healthcheck:
+      test: [CMD-SHELL, 'mongosh --quiet -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin /opt/mongo/mongo-healthcheck.js']
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 10s
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ci
+      RABBITMQ_DEFAULT_PASS: ${CI_PASSWORD:?Set ephemeral CI_PASSWORD}
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: '+S 2:2'
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+  execution:
+    image: ${CI_IMAGE:?Set CI_IMAGE}
+    platform: linux/amd64
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      MONGO_HOST: mongodb
+      MONGO_USERNAME: ci
+      MONGO_PASSWORD: ${CI_PASSWORD:?Set ephemeral CI_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USERNAME: ci
+      RABBITMQ_PASSWORD: ${CI_PASSWORD:?Set ephemeral CI_PASSWORD}
+      EXECUTION_JWT_ISSUER: https://auth.invalid
+      EXECUTION_JWT_AUDIENCE: oficina
+      EXECUTION_JWT_JWKS_URI: https://auth.invalid/jwks
+volumes:
+  mongo-data:
+networks:
+  default:
+    internal: true
