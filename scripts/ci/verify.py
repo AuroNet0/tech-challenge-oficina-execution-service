@@ -18,8 +18,32 @@ def require(condition, code):
         raise GateFailure(code)
 
 
-def command(arguments, cwd=None, timeout=1200, env=None):
+def maven_diagnostics(stdout, stderr):
+    output = (stdout + b"\n" + stderr).decode("utf-8", errors="replace")
+    output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
+    output = re.sub(r"(?s)-----BEGIN [^-]*PRIVATE KEY-----.*?(?:-----END [^-]*PRIVATE KEY-----|$)", "[REDACTED]", output)
+    output = re.sub(r"(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/]+@", r"\1[REDACTED]@", output)
+    output = re.sub(r"(?i)\b(Bearer|Basic)\s+[^\s,;]+", r"\1 [REDACTED]", output)
+    output = re.sub(
+        r'''(?i)(\b[\w.-]*(?:password|passwd|token|secret|credential|api[_-]?key|access[_-]?key|authorization)[\w.-]*["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)''',
+        r"\1[REDACTED]", output)
+    output = re.sub(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|(?:AKIA|ASIA)[A-Z0-9]{16})\b", "[REDACTED]", output)
+    for name, value in os.environ.items():
+        if len(value) >= 4 and re.search(r"(?i)password|passwd|token|secret|credential|api_?key|access_?key", name):
+            output = output.replace(value, "[REDACTED]")
+    lines = [line for line in output.splitlines()
+             if re.match(r"\s*(?:\[(?:ERROR|FATAL)\]|Caused by:|(?i:error:|fatal:))", line)]
+    print("Maven failure diagnostics:", file=sys.stderr)
+    for line in lines[-100:]:
+        print(line, file=sys.stderr)
+    if not lines:
+        print("No recognized Maven error lines; inspect the Maven invocation and runner setup.", file=sys.stderr)
+
+
+def command(arguments, cwd=None, timeout=1200, env=None, diagnose_maven=False):
     result = subprocess.run(arguments, cwd=cwd, env=env, capture_output=True, timeout=timeout)
+    if result.returncode != 0 and diagnose_maven:
+        maven_diagnostics(result.stdout, result.stderr)
     require(result.returncode == 0, "COMMAND_FAILED:" + Path(arguments[0]).name)
     return result.stdout
 
@@ -130,7 +154,7 @@ def verify(repository, report):
     report["stage"] = "maven"
     wrapper = repository / ("mvnw.cmd" if os.name == "nt" else "mvnw")
     arguments = [str(wrapper)] if os.name == "nt" else ["sh", str(wrapper)]
-    command(arguments + ["-B", "-ntp", "clean", "verify"], cwd=repository)
+    command(arguments + ["-B", "-ntp", "clean", "verify"], cwd=repository, diagnose_maven=True)
     report["checks"]["maven"] = "passed"
     report["stage"] = "tests_and_coverage"
     report["maven"] = maven_evidence(repository)
