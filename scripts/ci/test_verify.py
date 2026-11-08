@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -65,6 +66,30 @@ class VerificationTests(unittest.TestCase):
         with patch.object(verify.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"sensitive", b"sensitive")):
             with self.assertRaisesRegex(verify.GateFailure, "^COMMAND_FAILED:docker$"):
                 verify.command(["docker"])
+
+    def test_maven_failure_prints_sanitized_diagnostics_and_preserves_failure(self):
+        result = subprocess.CompletedProcess([], 1,
+            b"[INFO] environment and configuration dump omitted\n"
+            b"[ERROR] Failed to execute goal compiler: Compilation failure\n"
+            b"[ERROR] Example.java:[12,3] cannot find symbol\n"
+            b"[ERROR] password=example-password token=example-token\n",
+            b"[ERROR] Could not transfer artifact from https://" + b"user:example-password@repo.invalid\n"
+            b"[ERROR] Authorization: Bearer example-bearer\n"
+            b"[ERROR] Authorization: Basic example-basic\n"
+            b"[ERROR] Server rejected example-environment-value\n")
+        with patch.object(verify.subprocess, "run", return_value=result), \
+                patch.dict(verify.os.environ, {"CI_PASSWORD": "example-environment-value"}), \
+                patch.object(sys, "stderr", new_callable=io.StringIO) as diagnostic:
+            with self.assertRaisesRegex(verify.GateFailure, "^COMMAND_FAILED:mvnw$"):
+                verify.command(["mvnw", "clean", "verify"], diagnose_maven=True)
+        output = diagnostic.getvalue()
+        self.assertIn("Compilation failure", output)
+        self.assertIn("cannot find symbol", output)
+        self.assertIn("Could not transfer artifact", output)
+        self.assertIn("[REDACTED]", output)
+        for secret in ("example-password", "example-token", "example-bearer", "example-basic",
+                       "example-environment-value", "user:", "configuration dump"):
+            self.assertNotIn(secret, output)
 
     def test_pipeline_failure_is_reported_and_later_gates_are_not_run(self):
         java = subprocess.CompletedProcess([], 0, b"", b'openjdk version "21.0.12"')
