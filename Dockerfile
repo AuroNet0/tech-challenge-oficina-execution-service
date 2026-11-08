@@ -19,4 +19,7 @@ COPY --from=build /workspace/target/*.jar app.jar
 USER app
 
 EXPOSE 8080
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=5s --timeout=3s --start-period=30s --retries=20 \
+	CMD curl -fsS http://127.0.0.1:8080/actuator/health/readiness || exit 1
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
