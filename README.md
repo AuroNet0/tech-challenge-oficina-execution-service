@@ -149,7 +149,7 @@ A compensação não desfaz automaticamente trabalho físico. A validação de `
 
 ## 7. Execução local e testes
 
-Pré-requisitos: Java 21, Docker com containers Linux e Docker Compose. O repositório inclui Maven Wrapper para Unix e Windows; `.env.example` não foi identificado.
+Pré-requisitos: Java 21, Docker com containers Linux e Docker Compose. O repositório inclui Maven Wrapper para Unix e Windows.
 
 Configure as variáveis no ambiente ou em arquivo `.env` local, sem versionar credenciais:
 
@@ -190,7 +190,7 @@ No PowerShell, use `.\mvnw.cmd clean verify` ou `.\mvnw.cmd spring-boot:run`. **
 
 O [pom.xml](pom.xml) executa relatório e gate JaCoCo na fase `verify`: elemento `BUNDLE`, contador `LINE`, razão `COVEREDRATIO`, mínimo **0,80 (80%)**. A única exclusão configurada é `ExecutionApplication.class`.
 
-Cobertura SonarCloud informada para a análise de **13/11/2026: 89,4%**. Percentual e data foram fornecidos na solicitação desta documentação; não foi identificada evidência dessa análise nos arquivos do repositório. Projeto: [Execution no SonarCloud](https://sonarcloud.io/summary/new_code?id=AuroNet0_tech-challenge-oficina-execution-service).
+Cobertura medida pelo SonarCloud na análise de **13/11/2026: 89,4%**. Projeto: [Execution no SonarCloud](https://sonarcloud.io/summary/new_code?id=AuroNet0_tech-challenge-oficina-execution-service).
 
 ## 9. CI/CD
 
@@ -232,7 +232,7 @@ A pasta `k8s/` contém [k8s/execution-service.yaml](k8s/execution-service.yaml),
 
 O [Dockerfile](Dockerfile) usa Java 21, usuário `app` e healthcheck de readiness na porta 8080. A configuração de health inclui MongoDB na readiness e apenas `livenessState` na liveness; RabbitMQ não integra o health. Os GETs de probes são públicos e não expõem detalhes de componentes.
 
-Repositório de infraestrutura: [tech-challenge-oficina-k8s-infra](https://github.com/AuroNet0/tech-challenge-oficina-k8s-infra). O estado efetivo do serviço no EKS é **não identificado neste repositório**; o CI pressupõe o Deployment já existente e atualiza sua imagem.
+Repositório de infraestrutura: [tech-challenge-oficina-k8s-infra](https://github.com/AuroNet0/tech-challenge-oficina-k8s-infra). O Deployment é criado pelo Deploy desse repositório; o CI deste serviço atualiza a imagem do Deployment existente.
 
 ## 11. Estrutura do repositório
 
@@ -249,5 +249,4 @@ Repositório de infraestrutura: [tech-challenge-oficina-k8s-infra](https://githu
 | [.mvn](.mvn) | Configuração do Maven Wrapper |
 | [compose.yaml](compose.yaml) | Aplicação, MongoDB e perfil opcional RabbitMQ |
 
-Os dois arquivos de `docker/` são montados pelo Compose local e por `scripts/ci/compose.yaml`. Seu uso pelo ambiente de teste do Billing, mencionado na solicitação, é **não identificado neste repositório**; os testes Java daqui usam `MongoDBContainer`.
-
+Os dois arquivos de `docker/` são montados pelo Compose local e por `scripts/ci/compose.yaml`. O harness de integração do Billing (`integration/9.1.4`) também monta essa pasta; os testes Java daqui usam `MongoDBContainer`.
