@@ -1,0 +1,809 @@
+{
+  "info": {
+    "_postman_id": "482f794e-e504-469c-8c92-ef7a2c59f326",
+    "name": "Oficina - Execution Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Diagnósticos",
+      "item": [
+        {
+          "name": "Listar Diagnósticos por OS",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\",function(){pm.response.to.have.status(200);});",
+                  "pm.test(\"Tempo de resposta < 5000ms\",function(){pm.expect(pm.response.responseTime).to.be.below(5000);});",
+                  "var json=pm.response.json();var item=Array.isArray(json)?json[0]:(json&&json.content?json.content[0]:json);",
+                  "if(item&&item.id){pm.environment.set(\"diagnosticoId\",item.id);}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMecanico}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/diagnosticos?osId={{osId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diagnosticos"
+              ],
+              "query": [
+                {
+                  "key": "osId",
+                  "value": "{{osId}}"
+                }
+              ]
+            },
+            "description": "Lista os diagnósticos de uma OS. Role: MECANICO."
+          },
+          "response": []
+        },
+        {
+          "name": "Buscar Diagnóstico por ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMecanico}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/diagnosticos/{{diagnosticoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diagnosticos",
+                "{{diagnosticoId}}"
+              ]
+            },
+            "description": "Busca um diagnóstico pelo ID. Role: MECANICO."
+          },
+          "response": []
+        },
+        {
+          "name": "Iniciar Diagnóstico",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMecanico}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/diagnosticos/{{diagnosticoId}}/inicio",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diagnosticos",
+                "{{diagnosticoId}}",
+                "inicio"
+              ]
+            },
+            "description": "Inicia o diagnóstico da OS. Role: MECANICO."
+          },
+          "response": []
+        },
+        {
+          "name": "Adicionar Item ao Diagnóstico",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMecanico}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"itemId\":\"ITEM-001\",\"descricao\":\"Troca de óleo\",\"tipo\":\"SERVICO\",\"quantidade\":\"1\",\"unidadePreco\":\"UNIDADE\",\"precoPrevisto\":\"150.00\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/diagnosticos/{{diagnosticoId}}/itens",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diagnosticos",
+                "{{diagnosticoId}}",
+                "itens"
+              ]
+            },
+            "description": "Adiciona um item ao diagnóstico (tipo: SERVICO, PECA ou MATERIAL; unidadePreco: UNIDADE, HORA ou KIT). Role: MECANICO."
+          },
+          "response": []
+        },
+        {
+          "name": "Atualizar Observações do Diagnóstico",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMecanico}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"observacoes\":\"Motor com ruído na correia\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/diagnosticos/{{diagnosticoId}}/observacoes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diagnosticos",
+                "{{diagnosticoId}}",
+                "observacoes"
+              ]
+            },
+            "description": "Atualiza as observações do diagnóstico. Role: MECANICO."
+          },
+          "response": []
+        },
+        {
+          "name": "Concluir Diagnóstico",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMecanico}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/diagnosticos/{{diagnosticoId}}/conclusao",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diagnosticos",
+                "{{diagnosticoId}}",
+                "conclusao"
+              ]
+            },
+            "description": "Conclui o diagnóstico da OS. Role: MECANICO."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Reparos",
+      "item": [
+        {
+          "name": "Listar Reparos por OS",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\",function(){pm.response.to.have.status(200);});",
+                  "pm.test(\"Tempo de resposta < 5000ms\",function(){pm.expect(pm.response.responseTime).to.be.below(5000);});",
+                  "var json=pm.response.json();var item=Array.isArray(json)?json[0]:(json&&json.content?json.content[0]:json);",
+                  "if(item&&item.id){pm.environment.set(\"reparoId\",item.id);}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMecanico}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/reparos?osId={{osId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "reparos"
+              ],
+              "query": [
+                {
+                  "key": "osId",
+                  "value": "{{osId}}"
+                }
+              ]
+            },
+            "description": "Lista os reparos de uma OS. Role: MECANICO."
+          },
+          "response": []
+        },
+        {
+          "name": "Buscar Reparo por ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMecanico}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/reparos/{{reparoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "reparos",
+                "{{reparoId}}"
+              ]
+            },
+            "description": "Busca um reparo pelo ID. Role: MECANICO."
+          },
+          "response": []
+        },
+        {
+          "name": "Iniciar Reparo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMecanico}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/reparos/{{reparoId}}/inicio",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "reparos",
+                "{{reparoId}}",
+                "inicio"
+              ]
+            },
+            "description": "Inicia o reparo da OS. Role: MECANICO."
+          },
+          "response": []
+        },
+        {
+          "name": "Atualizar Observações do Reparo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMecanico}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"observacoes\":\"Correia substituída\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/reparos/{{reparoId}}/observacoes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "reparos",
+                "{{reparoId}}",
+                "observacoes"
+              ]
+            },
+            "description": "Atualiza as observações do reparo. Role: MECANICO."
+          },
+          "response": []
+        },
+        {
+          "name": "Concluir Reparo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMecanico}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/reparos/{{reparoId}}/conclusao",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "reparos",
+                "{{reparoId}}",
+                "conclusao"
+              ]
+            },
+            "description": "Conclui o reparo da OS. Role: MECANICO."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Fila e Histórico",
+      "item": [
+        {
+          "name": "Consultar Fila de Execução",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMecanico}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/execucoes/fila",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "execucoes",
+                "fila"
+              ]
+            },
+            "description": "Retorna a fila de execuções pendentes. Role: MECANICO."
+          },
+          "response": []
+        },
+        {
+          "name": "Histórico de Execuções por OS",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMecanico}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/execucoes/historico?osId={{osId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "execucoes",
+                "historico"
+              ],
+              "query": [
+                {
+                  "key": "osId",
+                  "value": "{{osId}}"
+                }
+              ]
+            },
+            "description": "Retorna o histórico de execuções de uma OS. Role: MECANICO."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Saúde",
+      "item": [
+        {
+          "name": "Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
+            },
+            "description": "Verifica a saúde geral do serviço."
+          },
+          "response": []
+        },
+        {
+          "name": "Liveness",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health/liveness",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health",
+                "liveness"
+              ]
+            },
+            "description": "Verifica se o serviço está vivo (liveness probe)."
+          },
+          "response": []
+        },
+        {
+          "name": "Readiness",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health/readiness",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health",
+                "readiness"
+              ]
+            },
+            "description": "Verifica se o serviço está pronto para receber tráfego (readiness probe)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Negativos",
+      "item": [
+        {
+          "name": "Fila sem permissão (Atendente)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 403\", function () { pm.response.to.have.status(403); });",
+                  "pm.test(\"Tempo de resposta < 5000ms\", function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAtendente}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/execucoes/fila",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "execucoes",
+                "fila"
+              ]
+            },
+            "description": "Tenta acessar a fila com token de Atendente; espera 403."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

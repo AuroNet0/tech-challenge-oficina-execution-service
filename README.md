@@ -68,6 +68,19 @@ O claim `roles` deve ser uma lista sem duplicatas, contendo somente `CLIENTE`, `
 
 Swagger/OpenAPI **não é publicado por política**: `springdoc.api-docs.enabled` e `springdoc.swagger-ui.enabled` são `false` em [application.yml](src/main/resources/application.yml), e as rotas de documentação não pertencem à allowlist de segurança. [BootstrapWebIntegrationTest](src/test/java/com/oficina/execution/infrastructure/web/BootstrapWebIntegrationTest.java) verifica sua negação.
 
+### Coleção Postman
+
+A [coleção do Execution Service](docs/postman/execution-collection.json) contém requisições de diagnósticos, reparos, fila, histórico, saúde e um caso negativo de permissão com o perfil Atendente.
+
+1. Importe a coleção e o arquivo de ambiente no Postman.
+2. Selecione o ambiente `Oficina - AWS`.
+3. Preencha `baseUrl` com a URL do API Gateway, as credenciais dos perfis e `osId` com o identificador de uma OS aberta no `os-service`.
+4. Gere os tokens com o Login da coleção do repositório `tech-challenge-oficina-auth`, em `docs/postman`, e preencha as variáveis de token do ambiente.
+
+As operações técnicas exigem o perfil Mecânico e autorização na OS indicada por `osId`; diagnóstico e reparo só existem depois que a Saga os cria. As requisições de saúde são públicas, e o caso negativo usa o perfil Atendente para verificar a negação de acesso.
+
+A coleção disponível usa variáveis para tokens, sem credenciais nem tokens versionados; este serviço não publica Swagger, sendo a coleção Postman a referência de uso da API.
+
 ## 4. Dados
 
 O serviço tem banco próprio **MongoDB (NoSQL)**, com nome padrão `oficina_execution`, configurável por `MONGO_DATABASE`. O [Compose](compose.yaml) provisiona sua instância e volume `mongodb-data`. A URI em [application.yml](src/main/resources/application.yml) usa `spring.mongodb.uri`, `replicaSet=rs0` e `directConnection=true`.
@@ -234,6 +247,7 @@ Repositório de infraestrutura: [tech-challenge-oficina-k8s-infra](https://githu
 | [src/main](src/main) | Aplicação Java e configuração Spring |
 | [src/test](src/test) | Testes unitários, integração e fixtures JWT |
 | [docs](docs) | Mensageria, CI, fila operacional e autorização |
+| `docs/postman` | Coleção Postman do serviço e ambiente |
 | `k8s` | Manifestos Kubernetes de referência do serviço |
 | [docker](docker) | `mongo-entrypoint.sh` gera a chave interna e inicia `mongod` com `rs0`; `mongo-healthcheck.js` inicializa o replica set quando necessário e verifica o primário |
 | [scripts/ci](scripts/ci) | Verificador, testes dos scripts, validador YAML e Compose isolado de runtime |
