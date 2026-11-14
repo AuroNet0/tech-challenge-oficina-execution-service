@@ -243,27 +243,3 @@ Repositório de infraestrutura: [tech-challenge-oficina-k8s-infra](https://githu
 
 Os dois arquivos de `docker/` são montados pelo Compose local e por `scripts/ci/compose.yaml`. Seu uso pelo ambiente de teste do Billing, mencionado na solicitação, é **não identificado neste repositório**; os testes Java daqui usam `MongoDBContainer`.
 
-## Conferência documental
-
-### Afirmações não confirmadas
-
-- Valores de issuer, audience, JWKS e credenciais por ambiente: não identificados; dependem de configuração externa.
-- Migrações versionadas: não identificadas.
-- Cobertura SonarCloud de 89,4% em 13/11/2026: dado fornecido na solicitação, sem evidência local identificada; imagem `docs/img/sonarcloud.png` ausente.
-- Serviço efetivamente rodando no EKS: não identificado; o workflow e os manifestos de referência documentam a configuração do deploy.
-- Política de imutabilidade das tags no ECR: não identificada; o workflow utiliza SHA e reutiliza a tag existente.
-- Uso dos scripts `docker/` no ambiente de teste do Billing: não identificado nos arquivos locais.
-
-### Divergências entre documentação anterior e código
-
-- README citava disponibilidade do OpenAPI; configuração, segurança e teste confirmam documentação desabilitada e acesso negado.
-- `docs/ci.md` dizia que não havia publicação de imagens ou deploy e limitava gatilhos a `homolog`; o workflow inclui `main`, SonarCloud e deploy EKS/ECR.
-- `docs/messaging.md` dizia que não existiam endpoints de início e atribuía ao consumidor o início do reparo; controllers e casos de uso implementam início REST, enquanto comandos criam `PENDING`. O trecho foi corrigido.
-- README listava `infrastructure/observability` e três portas de repositório; a árvore atual não contém esse pacote e tem cinco portas de repositório, além das demais portas de saída.
-- O documento de segurança registra a etapa histórica 8.3.3, anterior à fila e ao adapter do perfil `mtls`; recebeu nota para distinguir esse registro do comportamento atual.
-- Percentuais e quantidades de testes nos docs antigos são evidências datadas de execuções anteriores, não medições atuais nem a cobertura informada do SonarCloud.
-
-### Links relativos e referências corrigidos
-
-- Removida de `docs/security/execution-authorization-8.3.3.md` a referência ao roteiro removido `integration/README.md`; a descrição histórica ficou sem link.
-- Os links relativos ativos deste README e dos documentos alterados foram conferidos contra arquivos ou diretórios existentes. A referência à imagem ausente foi mantida somente em bloco de código.
