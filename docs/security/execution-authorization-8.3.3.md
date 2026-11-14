@@ -2,6 +2,8 @@
 
 Data: 26/10/2026. Escopo exclusivo do Execution; etapa 8.3.4 não iniciada.
 
+Este documento registra a entrega histórica 8.3.3 e suas evidências datadas. No código atual, o perfil `mtls` seleciona `MtlsTechnicalAuthorizationAdapter`, enquanto o perfil padrão continua indisponível. A API também possui início operacional e consulta de pendências, descritos na [fila operacional](../operational-queue-9.1.2.md). As limitações e próximos passos históricos abaixo devem ser lidos nesse contexto; configuração e certificados do canal dependem do ambiente.
+
 ## 1. Referências, Git e versões
 
 Inspecionados antes da implementação:
@@ -211,7 +213,7 @@ Caminhos Java relativos a `src/main/java/com/oficina/execution/`, salvo indicaç
 | compose.yaml | repasse obrigatório da configuração JWT, sem subir stack Compose/deploy |
 | README.md | execução/configuração e exemplos Bearer com bloqueio explícito |
 | docs/messaging.md | separação JWT HTTP e confiança RabbitMQ |
-| integration/README.md | roteiro Basic anterior identificado como histórico, sem executá-lo |
+| Roteiro de integração anterior, removido | registro histórico de autenticação Basic; não descreve a autenticação JWT atual |
 | infrastructure/config/SecurityConfig.java | JWT, stateless, allowlist HTTP e method security |
 | infrastructure/config/OpenApiConfig.java | contrato Bearer no esquema OpenAPI |
 | infrastructure/web/controller/DiagnosticController.java | autorização por método/recurso/capacidade |

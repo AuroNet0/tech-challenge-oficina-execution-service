@@ -110,7 +110,7 @@ A entrega e at-least-once: uma queda depois do confirm e antes de salvar PUBLISH
 
 DiagnosticService.complete e RepairService.complete persistem agregado, historico e Outbox na mesma transacao MongoDB. Falha na Outbox reverte a conclusao. Chamadas repetidas ou concorrentes incompatíveis retornam HTTP 409 sem criar outro evento.
 
-A API HTTP exige JWT RS256, MECANICO e decisao especifica da OS; na etapa 8.3.3 o canal produtivo de autorizacao permanece bloqueado ate integracao confiavel com OS. Isso nao exige JWT humano nos consumidores RabbitMQ. Nao existem endpoints de inicio, autorizacao manual, simulacao de eventos ou alteracao generica de status. A autorizacao de reparo continua sendo a operacao de dominio chamada pelo consumidor de repair.start.v1 apos diagnostico concluido e consistente. Detalhes: [autorizacao 8.3.3](security/execution-authorization-8.3.3.md).
+A API HTTP exige JWT RS256, papel MECANICO e decisão específica da OS. O perfil `mtls` usa o adapter HTTPS para o OS; sem esse perfil, o adapter padrão retorna indisponibilidade (503). Os consumidores RabbitMQ não exigem JWT humano. Os comandos `diagnostic.start.v1` e `repair.start.v1` disponibilizam agregados PENDING; o segundo exige diagnóstico concluído e consistente. O início operacional ocorre por `POST /api/v1/diagnosticos/{id}/inicio` ou `POST /api/v1/reparos/{id}/inicio`, com capacidade WRITE correspondente, e grava o evento started na Outbox. Não existem endpoints de autorização manual, simulação de eventos ou alteração genérica de status. Detalhes: [fila operacional](operational-queue-9.1.2.md) e [autorização 8.3.3](security/execution-authorization-8.3.3.md).
 
 ## Compensacao de reparos
 

@@ -1,34 +1,61 @@
-# CI do Execution Service
+# CI/CD do Execution Service
 
-O workflow `.github/workflows/ci.yml` verifica PRs e pushes para `homolog`
-e aceita execução manual. Não publica imagens nem executa deploy.
-Segue o escopo acadêmico simplificado do OS Service (commit
-`2aea68c`), usando apenas este repositório.
+Fonte: [workflow ci.yml](../.github/workflows/ci.yml), [verificador](../scripts/ci/verify.py), [Compose de runtime](../scripts/ci/compose.yaml), [Dockerfile](../Dockerfile) e [pom.xml](../pom.xml).
 
-## Gates obrigatórios
+## Gatilhos
 
-1. Testes dos scripts CI.
-2. Scanner básico de fontes e configurações.
-3. Java 21 e `./mvnw -B -ntp clean verify`.
-4. Relatórios de testes sem falhas, erros ou testes ignorados e JaCoCo LINE >= 80%.
-5. Build Docker `linux/amd64`, usuário não root, healthcheck e SIGTERM.
-6. Inicialização com MongoDB 8.0 autenticado, replica set `rs0` e RabbitMQ 4;
-   `/actuator/health`, `/actuator/health/liveness` e
-   `/actuator/health/readiness` devem retornar `UP`.
-7. Parada por SIGTERM em até 30 segundos, sem OOM ou encerramento forçado
-   (código de saída 0 ou 143).
+O workflow `Execution CI` executa em pull requests e pushes para `main` e `homolog`, além de `workflow_dispatch`. Possui os jobs `verify` e `deploy`.
 
-Qualquer falha retorna código diferente de zero e reprova o job. A coleta de
-relatórios roda mesmo em falha e não altera esse resultado. `job.json` registra
-a revisão e o estado do job; `verification.json` registra cada gate, métricas
-Maven/JaCoCo e runtime. Gates não executados ficam como `not_run`.
-Somente esses JSONs são publicados como artefatos, com retenção de sete dias.
+## Job verify
 
-## Execução local
+Executa em `ubuntu-22.04`, com timeout de 45 minutos e Java Temurin 21:
 
-Requisitos: Git, Python 3, Java 21 e Docker com Compose v2 e containers Linux.
-Os testes Maven iniciam seus próprios MongoDB/RabbitMQ via Testcontainers,
-incluindo suporte a transações MongoDB. Nenhum outro microsserviço é necessário.
+1. Checkout com histórico completo e sem persistência de credenciais.
+2. Testes dos scripts CI via `python3 -B -m unittest discover -s scripts/ci -p 'test_*.py'`.
+3. `scripts/ci/verify.py`: scanner básico de segredos, validação de Java 21 e Maven Wrapper com `-B -ntp clean verify`.
+4. Conferência dos relatórios Maven: testes presentes e zero falhas, erros ou ignorados; cobertura JaCoCo LINE mínima de 80%. O POM também aplica o gate `BUNDLE`/`LINE`/`COVEREDRATIO` de 0,80 em `verify`.
+5. Build Docker para `linux/amd64`; validação de usuário não root, entrypoint Java, healthcheck de readiness, SIGTERM e ausência de segredos detectados nas variáveis da imagem.
+6. Runtime com MongoDB 8.0 autenticado em replica set `rs0` e RabbitMQ 4, em projeto Compose temporário: usuário não root, Java 21 e os três endpoints de health retornando `UP`.
+7. Parada por SIGTERM em até 30 segundos, sem OOM, com saída 0 ou 143; remoção de containers, rede e volume temporários em `finally`.
+8. Análise SonarCloud com o XML `target/site/jacoco/jacoco.xml`, organização `auronet0` e project key `AuroNet0_tech-challenge-oficina-execution-service`.
+
+`sonar.qualitygate.wait` é `true` somente em push na `main`: nesse caso o Quality Gate bloqueia a continuidade. A análise é executada também nos demais gatilhos; ausência de `SONAR_TOKEN` ou falha do scanner reprova o job.
+
+A coleta de resultados executa mesmo em falha. `job.json` registra revisão e estado do job; `verification.json` registra os gates do verificador, incluindo itens não executados como `not_run`. Apenas os JSONs sanitizados são publicados no artefato `execution-ci-${{ github.sha }}`, com retenção de sete dias.
+
+O scanner básico procura padrões de chaves privadas, identificadores AWS, tokens GitHub, URLs com credenciais e atribuições literais de segredos conforme o tipo de arquivo. Não imprime os valores encontrados e não garante detectar todo segredo possível. A inspeção profunda de binários de terceiros fica `not_run` no relatório do verificador.
+
+## Job deploy
+
+Depende de `verify` e roda somente em push na `main`, em `ubuntu-latest`. Usa OIDC (`id-token: write`) para assumir a role indicada por `vars.AWS_ROLE_ARN`. A concorrência do grupo `deploy-execution-service` não cancela um deploy em andamento.
+
+O preflight consulta o cluster EKS e o repositório ECR. `ResourceNotFoundException` ou `RepositoryNotFoundException` produzem skip do deploy, permitindo o ambiente desligado. Outros erros falham; não são tratados como ambiente ausente. A configuração da role ocorre antes do preflight.
+
+Com ambos presentes, faz checkout de `github.sha`. Procura uma imagem com tag igual ao SHA completo: reutiliza o digest quando já existe; caso contrário, autentica no ECR, faz build e push. Esse procedimento evita sobrescrever deliberadamente uma tag existente; a política de imutabilidade do repositório ECR não é configurada pelo workflow.
+
+Após resolver e validar o digest, atualiza o kubeconfig e executa `kubectl set image` com a referência por digest. Aguarda `kubectl rollout status` por até 300 segundos; em falha coleta descrição e logs e retorna erro. Não executa rollback automático. O resumo registra serviço, SHA, digest e resultado de deploy ou skip.
+
+| Configuração | Valor |
+| --- | --- |
+| `AWS_REGION` | `us-east-1` |
+| `CLUSTER` | `tc-oficina-p4-demo-a` |
+| `NAMESPACE` | `tc-oficina-p4-demo-a` |
+| `ECR_REPOSITORY` | `tc-oficina-p4-demo-a-execution` |
+| `DEPLOYMENT` / `CONTAINER` | `execution-service` / `execution-service` |
+
+O endereço do registro é obtido a partir da conta retornada por `aws sts get-caller-identity`. O workflow pressupõe o Deployment existente; sua leitura não comprova o estado do ambiente.
+
+## Secrets e variáveis
+
+| Nome | Tipo | Uso |
+| --- | --- | --- |
+| `SONAR_TOKEN` | Secret GitHub Actions | Análise SonarCloud |
+| `AWS_ROLE_ARN` | Variável GitHub Actions | Role de deploy assumida via OIDC |
+| `GITHUB_TOKEN` | Token automático do GitHub Actions | Repassado ao scanner SonarCloud |
+
+## Verificação local
+
+Requisitos do verificador: Git no PATH, Python 3, Java 21 e Docker com Compose v2 e containers Linux. Os testes Maven iniciam MongoDB/RabbitMQ via Testcontainers, sem exigir outros microsserviços.
 
 ```sh
 python3 -B -m unittest discover -s scripts/ci -p 'test_*.py'
@@ -36,55 +63,10 @@ python3 -B scripts/ci/verify.py --output target/ci-verification
 git diff --check
 ```
 
-No Windows, usar `python` no lugar de `python3` conforme a instalação.
-O diretório de saída é criado após o Maven, pois `clean` remove `target`.
-O scanner considera arquivos versionados e arquivos novos não ignorados.
+No Windows, use `python` no lugar de `python3` conforme a instalação. O diretório de saída é criado após o Maven, pois `clean` remove `target`. O scanner considera arquivos versionados e novos não ignorados.
 
-Para validar os YAMLs, instalar PyYAML no ambiente de ferramentas e executar
-`python3 -B scripts/ci/validate_yaml.py`. PyYAML não é dependência da aplicação
-nem do verificador principal.
+Para validar os YAMLs, o [validador existente](../scripts/ci/validate_yaml.py) usa PyYAML no ambiente de ferramentas: `python3 -B scripts/ci/validate_yaml.py`.
 
-O build Docker usa apenas `.mvn`, wrapper, POM e fontes no estágio de compilação;
-`target` é excluído do contexto. As imagens-base Java 21 existentes são mantidas.
-O smoke test cria um projeto Compose exclusivo, sem portas publicadas, com rede
-interna e senha aleatória efêmera. Containers, rede e volume desse projeto são
-removidos em `finally`, inclusive em falha. Os endpoints JWT fictícios usam HTTPS;
-o teste de health não solicita JWT nem depende do Auth.
+## Correção documental
 
-## Escopo de segurança
-
-O scanner procura chaves privadas, identificadores AWS, tokens GitHub e URLs com
-credenciais nos arquivos do repositório. Também recusa atribuições literais de
-segredos nas fontes principais e configurações de build/CI/runtime. Referências
-a variáveis de ambiente são aceitas. As senhas locais já documentadas em
-placeholders e as fixtures de integração não representam credenciais de ambiente
-real. O scanner não imprime valores encontrados.
-
-É uma verificação básica por padrões, não uma garantia de ausência de todo
-segredo possível. Não há inspeção profunda de JARs ou bibliotecas de terceiros,
-nem exceções para Netty/GnuTLS. Essa inspeção fica explicitamente `not_run` e
-não é um gate. O scanner central da Infra não é utilizado nem modificado.
-
-Nenhuma regra de negócio, contrato HTTP/JWT, Inbox/Outbox, idempotência ou
-configuração de transações da aplicação é alterada por este CI.
-
-## Validação local em 08/11/2026
-
-- Origem confirmada: `AuroNet0/tech-challenge-oficina-execution-service`;
-  branch `homolog`, HEAD `929c6de05e6b482d82fd097e6cd61ac1d38f9b30`,
-  árvore inicialmente limpa.
-- Maven `clean verify` com Java 21: 157 testes, zero falhas, erros ou ignorados.
-- JaCoCo LINE: 877 cobertas / 927 totais = 94,61%; gate de 80% aprovado.
-- Sete testes dos scripts CI aprovados, incluindo propagação de falhas,
-  scanner, cobertura, contrato da imagem e limpeza após falha de startup.
-- Workflow e Compose validados com PyYAML; `git diff --check` aprovado.
-- Build multistage `linux/amd64` aprovado, independente do `target` local.
-- Imagem sem credenciais detectadas em suas variáveis; runtime Java 21,
-  usuário `app` com UID 100, três endpoints de health `UP`.
-- MongoDB autenticado com replica set e RabbitMQ saudáveis no smoke test.
-- SIGTERM aprovado, saída 143, sem OOM; recursos Compose temporários removidos.
-- Scanner básico de fontes/configurações aprovado. Relatórios locais ficam em
-  `target/ci-local-quality.json` e `target/ci-local-runtime.json`.
-- Inspeção profunda de binários de terceiros e GitHub Actions remoto não
-  executados. AWS, ECR push, deploy, Terraform, commit e push não executados.
-- Nenhum bloqueador funcional identificado nas verificações executadas.
+A versão anterior deste documento descrevia somente `homolog` e afirmava ausência de publicação e deploy. Essa descrição foi substituída pelo comportamento do workflow atual. Evidências históricas de execução local não constituem comprovação de execução atual do CI, do SonarCloud ou do deploy.
