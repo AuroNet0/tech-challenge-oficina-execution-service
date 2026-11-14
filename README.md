@@ -1,290 +1,266 @@
 # tech-challenge-oficina-execution-service
 
-Microsservico Execution Service do Tech Challenge FIAP - Fase 4, etapa 6.4.
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=AuroNet0_tech-challenge-oficina-execution-service&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=AuroNet0_tech-challenge-oficina-execution-service)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=AuroNet0_tech-challenge-oficina-execution-service&metric=coverage)](https://sonarcloud.io/summary/new_code?id=AuroNet0_tech-challenge-oficina-execution-service)
 
-## Objetivo
+O Execution Service mantém os diagnósticos técnicos, reparos e histórico de execução das ordens de serviço da oficina.
+Recebe comandos do OS Service pelo RabbitMQ e disponibiliza trabalhos pendentes para início explícito por um mecânico autorizado via REST.
+Persiste estado técnico, histórico, Inbox e Outbox em MongoDB transacional e publica os resultados pela Outbox.
+Participa da Saga coordenada pelo OS Service, sem assumir sua orquestração.
 
-O Execution Service implementa o dominio de diagnostico tecnico e execucao dos reparos de uma ordem de servico, com persistencia propria MongoDB. O bootstrap de Spring Boot, seguranca inicial, OpenAPI, health checks e Docker permanece preservado.
+## 2. Arquitetura do serviço
 
-A API REST permite consultar e atualizar tecnicamente diagnosticos e reparos existentes. Comandos RabbitMQ do OS Service disponibilizam trabalhos PENDING na fila operacional; um mecanico autorizado inicia explicitamente via REST. Inbox, estado tecnico, historico e Outbox sao persistidos atomicamente no MongoDB; eventos sao publicados posteriormente pela Outbox. A Saga continua exclusivamente no OS Service. Consulte [fila operacional 9.1.2](docs/operational-queue-9.1.2.md) para inspecao, estados, endpoints, exemplos, autorizacao e impacto no E2E 8.3.5, e [docs/messaging.md](docs/messaging.md) para contratos de mensagens.
-
-## Responsabilidades
-
-- Consumir comandos do OS Service, como `diagnostic.start.v1`, `repair.start.v1` e `repair.cancel.v1`.
-- Publicar eventos para a saga orquestrada pelo OS Service, como `diagnostic.started.v1`, `diagnostic.completed.v1`, `repair.started.v1`, `repair.completed.v1` e eventos de falha.
-- Integrar os estados tecnicos ja persistidos no MongoDB com comandos e eventos.
-- Participar da arquitetura de microsservicos sem consultar diretamente bancos do OS Service ou Billing Service.
-
-Os contratos seguem a referencia do OS Service em `docs/events.md` e `docs/saga.md`.
-
-## Tecnologias
-
-- Java 21
-- Spring Boot 4.1.1
-- Spring Web MVC
-- Spring Data MongoDB
-- Spring Validation
-- Spring Security
-- Spring Boot Actuator
-- Springdoc OpenAPI 3.1.1
-- JUnit 5
-- Mockito
-- RabbitMQ, Transactional Inbox e Outbox
-- Testcontainers MongoDB e RabbitMQ
-- JaCoCo
-- Docker e Docker Compose
-
-## Arquitetura
-
-Pacote raiz: `com.oficina.execution`.
-
-```text
-src/main/java/com/oficina/execution/
-├── ExecutionApplication.java
-├── domain/
-│   ├── model/
-│   ├── enums/
-│   └── exception/
-├── application/
-│   ├── usecase/
-│   └── port/
-│       ├── in/
-│       └── out/
-└── infrastructure/
-    ├── persistence/
-    ├── messaging/
-    ├── web/
-    ├── config/
-    └── observability/
+```mermaid
+flowchart LR
+    API[API REST e segurança] --> UC[Casos de uso]
+    UC --> DOM[Domínio]
+    UC --> PORT[Portas e adapters de persistência]
+    PORT --> DB[(MongoDB: estado, histórico, Inbox e Outbox)]
+    DB --> PUB[Publicador Outbox]
+    PUB --> MQ[RabbitMQ]
+    MQ --> CON[Consumidor de comandos]
+    CON --> UC
+    API --> AUTH[Autorização técnica no OS Service]
 ```
 
-O dominio possui os modelos imutaveis `Diagnostic`, `DiagnosticItem`, `Repair` e `ExecutionHistory`, enums e `DomainException`, sem dependencia de Spring ou MongoDB. `application/port/in` define as operacoes dos casos de uso; `application/usecase` implementa consultas e alteracoes transacionais; `application/port/out` define tres portas de repositorio. `infrastructure/persistence` separa `document`, `repository`, `adapter` e `mapper`. Controllers finos, requests validados, responses e tratamento HTTP estao em `infrastructure/web`; documentos MongoDB nao sao expostos.
+Pacote raiz: `com.oficina.execution`. Estrutura conferida em [src/main/java](src/main/java/com/oficina/execution):
 
-## Configuracao MongoDB
-
-A conexao usa variaveis de ambiente:
-
-| Variavel | Padrao local |
+| Pacote | Responsabilidade |
 | --- | --- |
-| `MONGO_HOST` | `localhost` |
-| `MONGO_PORT` | `27017` |
-| `MONGO_DATABASE` | `oficina_execution` |
-| `MONGO_USERNAME` | `oficina_execution` |
-| `MONGO_PASSWORD` | `oficina_execution` |
-| `MONGO_AUTH_DATABASE` | `admin` |
+| `domain/model`, `domain/enums`, `domain/exception` | Agregados, itens, histórico, mensagens persistidas, estados e regras de domínio |
+| `application/port/in`, `application/port/out` | Contratos de casos de uso, persistência, autorização, codec e broker |
+| `application/usecase` | Operações técnicas, fila operacional, comandos e registro de eventos |
+| `application/message`, `application/exception` | Envelopes, payloads e exceções de aplicação |
+| `infrastructure/web` | Controllers, requests, responses e tratamento HTTP de erros |
+| `infrastructure/persistence` | Documentos, repositórios, adapters e mappers MongoDB |
+| `infrastructure/messaging` | Topologia RabbitMQ, consumidor, codec e publicador Outbox |
+| `infrastructure/security`, `infrastructure/config` | JWT, autorização técnica, política HTTP e configuração transacional |
 
-O banco padrao de desenvolvimento e `oficina_execution`. A propriedade usada pelo Spring Boot 4 e `spring.mongodb.uri`. Nao versionar credenciais reais.
+## 3. API e autenticação
 
-## Execucao local
+Rotas conferidas nos [controllers](src/main/java/com/oficina/execution/infrastructure/web/controller) e em [SecurityConfig](src/main/java/com/oficina/execution/infrastructure/config/SecurityConfig.java). `osId` nas consultas é um parâmetro obrigatório.
 
-Com MongoDB disponivel, defina EXECUTION_JWT_ISSUER, EXECUTION_JWT_AUDIENCE e EXECUTION_JWT_JWKS_URI (HTTPS) conforme o Auth do ambiente. Essas variaveis sao obrigatorias, inclusive no Compose; nao ha valores produtivos padrao. Entao execute:
+| Método | Caminho | Papel (role) exigido |
+| --- | --- | --- |
+| GET | `/api/v1/diagnosticos/{id}` | `MECANICO` |
+| GET | `/api/v1/diagnosticos?osId={uuid}` | `MECANICO` |
+| POST | `/api/v1/diagnosticos/{id}/inicio` | `MECANICO` |
+| POST | `/api/v1/diagnosticos/{id}/itens` | `MECANICO` |
+| PATCH | `/api/v1/diagnosticos/{id}/observacoes` | `MECANICO` |
+| POST | `/api/v1/diagnosticos/{id}/conclusao` | `MECANICO` |
+| GET | `/api/v1/reparos/{id}` | `MECANICO` |
+| GET | `/api/v1/reparos?osId={uuid}` | `MECANICO` |
+| POST | `/api/v1/reparos/{id}/inicio` | `MECANICO` |
+| PATCH | `/api/v1/reparos/{id}/observacoes` | `MECANICO` |
+| POST | `/api/v1/reparos/{id}/conclusao` | `MECANICO` |
+| GET | `/api/v1/execucoes/historico?osId={uuid}` | `MECANICO` |
+| GET | `/api/v1/execucoes/fila` | `MECANICO` |
+| GET | `/actuator/health` | Nenhum; acesso público |
+| GET | `/actuator/health/liveness` | Nenhum; acesso público |
+| GET | `/actuator/health/readiness` | Nenhum; acesso público |
+| GET | `/internal/bootstrap` | Acesso negado pela política HTTP |
+
+Além do papel, `@PreAuthorize` exige decisão atual de autorização para usuário, OS e capacidade: `DIAGNOSTIC_READ`, `DIAGNOSTIC_WRITE`, `DIAGNOSTIC_COMPLETE`, `REPAIR_READ`, `REPAIR_WRITE`, `REPAIR_COMPLETE` ou `HISTORY_READ`, conforme a operação. A fila filtra cada trabalho pela capacidade de leitura correspondente. O perfil `mtls` usa o adapter HTTPS para o OS configurado em `oficina.internal.os-uri`; a configuração de certificados depende do ambiente. Sem esse perfil, o adapter padrão retorna indisponibilidade (HTTP 503). Consulte [autorização técnica](docs/security/execution-authorization-8.3.3.md) e [fila operacional](docs/operational-queue-9.1.2.md).
+
+A autenticação é Bearer JWT stateless. [AuthJwtDecoder](src/main/java/com/oficina/execution/infrastructure/security/AuthJwtDecoder.java) verifica assinatura RS256 com JWKS HTTPS, header `typ=JWT`, `kid` e seleção de uma única chave. Valida `iss` exatamente contra `EXECUTION_JWT_ISSUER`; `aud` deve ser uma lista contendo `EXECUTION_JWT_AUDIENCE`. Os valores de issuer e audience por ambiente não foram identificados no repositório. Também exige `sub` e `jti` como UUIDs canônicos e valida `iat`, `nbf` e `exp`, com duração máxima de 900 segundos e tolerância temporal zero.
+
+O claim `roles` deve ser uma lista sem duplicatas, contendo somente `CLIENTE`, `ATENDENTE`, `MECANICO` e/ou `GERENTE`. A conversão acrescenta `ROLE_`; operações técnicas exigem `ROLE_MECANICO`. As demais rotas e métodos são negados por padrão.
+
+Swagger/OpenAPI **não é publicado por política**: `springdoc.api-docs.enabled` e `springdoc.swagger-ui.enabled` são `false` em [application.yml](src/main/resources/application.yml), e as rotas de documentação não pertencem à allowlist de segurança. [BootstrapWebIntegrationTest](src/test/java/com/oficina/execution/infrastructure/web/BootstrapWebIntegrationTest.java) verifica sua negação.
+
+## 4. Dados
+
+O serviço tem banco próprio **MongoDB (NoSQL)**, com nome padrão `oficina_execution`, configurável por `MONGO_DATABASE`. O [Compose](compose.yaml) provisiona sua instância e volume `mongodb-data`. A URI em [application.yml](src/main/resources/application.yml) usa `spring.mongodb.uri`, `replicaSet=rs0` e `directConnection=true`.
+
+O MongoDB local usa a imagem `mongo:8.0` e replica set de um membro. [MongoTransactionConfig](src/main/java/com/oficina/execution/infrastructure/config/MongoTransactionConfig.java) fornece `MongoTransactionManager`; os casos de uso de escrita usam `@Transactional`. Diagnósticos e reparos possuem `@Version` para concorrência otimista.
+
+| Coleção | Conteúdo |
+| --- | --- |
+| `diagnostics` | Diagnósticos e itens embutidos |
+| `work_orders` | Reparos |
+| `execution_history` | Histórico técnico |
+| `inbox_messages` | Comandos recebidos e situação de processamento |
+| `outbox_events` | Eventos a publicar, tentativas, sequência e lease |
+
+Os nomes são definidos nos [documentos MongoDB](src/main/java/com/oficina/execution/infrastructure/persistence/document). Índices são criados pelas anotações com `spring.data.mongodb.auto-index-creation=true`. Migrações versionadas ou ferramenta de migração: **não identificado**.
+
+## 5. Mensageria
+
+Contratos em [docs/messaging.md](docs/messaging.md), conferidos em [RabbitMessagingConfig](src/main/java/com/oficina/execution/infrastructure/messaging/RabbitMessagingConfig.java), [CommandHandler](src/main/java/com/oficina/execution/application/usecase/CommandHandler.java) e [RabbitMessageBrokerAdapter](src/main/java/com/oficina/execution/infrastructure/messaging/RabbitMessageBrokerAdapter.java).
+
+| Exchange topic durável | Uso |
+| --- | --- |
+| `oficina.commands` | Comandos recebidos do OS Service |
+| `oficina.events` | Eventos publicados pelo Execution |
+| `execution.commands.retry` | Encaminhamento de falhas transitórias |
+| `execution.commands.dlx` | Encaminhamento de mensagens rejeitadas à DLQ |
+
+| Fila durável | Routing key consumida |
+| --- | --- |
+| `execution.diagnostic.start` | `diagnostic.start.v1` |
+| `execution.repair.start` | `repair.start.v1` |
+| `execution.repair.cancel` | `repair.cancel.v1` |
+
+Cada fila possui uma auxiliar com sufixo `.retry`, vinculada a `execution.commands.retry`. Seu TTL devolve a mensagem a `oficina.commands`. `execution.commands.dlq` recebe o binding `#` de `execution.commands.dlx`. As filas principais não têm argumentos de DLX; o consumidor transfere explicitamente para retry/DLQ com publicação persistente, `mandatory` e confirmação do broker antes de liberar a entrega original.
+
+Por padrão, comandos transitórios aguardam 5 segundos e têm limite de 5 processamentos, incluindo o inicial (`COMMAND_RETRY_DELAY`, `COMMAND_MAX_DELIVERIES`). Erros permanentes seguem diretamente para DLQ. Falha ao confirmar a transferência preserva a entrega para reenvio. Não há retorno automático da DLQ aos comandos.
+
+| Eventos publicados em `oficina.events` | Payload |
+| --- | --- |
+| `diagnostic.started.v1`, `repair.started.v1` | Objeto vazio |
+| `diagnostic.completed.v1` | Itens do diagnóstico |
+| `repair.completed.v1` | `repairId` |
+| `diagnostic.failed.v1`, `repair.failed.v1` | `reason` |
+| `repair.cancelled.v1` | Objeto vazio |
+| `repair.cancellation-failed.v1` | `reason` |
+
+A Inbox deduplica por `eventId`. O processamento de comandos persiste Inbox, alterações técnicas, histórico e eventuais eventos de Outbox na mesma transação. Inícios e conclusões REST gravam estado, histórico e Outbox atomicamente. O [publicador Outbox](src/main/java/com/oficina/execution/infrastructure/messaging/OutboxPublisher.java) envia depois do commit, preservando o `eventId` nas tentativas; a entrega é **at-least-once**.
+
+A Outbox aplica lease e backoff exponencial, com padrões de 5 tentativas, atraso inicial de 10 segundos e máximo de 5 minutos. Eventos `FAILED` bloqueiam os seguintes da mesma OS; não há endpoint de redrive. O consumo RabbitMQ não exige JWT humano.
+
+## 6. Papel na Saga e compensação
+
+O Execution é **participante**. O orquestrador é o [OS Service](https://github.com/AuroNet0/tech-challenge-oficina-os-service), conforme os contratos registrados em [mensageria](docs/messaging.md).
+
+`diagnostic.start.v1` cria diagnóstico `PENDING`. `repair.start.v1` exige diagnóstico concluído e consistente com a Saga e disponibiliza reparo `PENDING`. Esses comandos não iniciam automaticamente o trabalho físico: o mecânico autorizado chama `/inicio`, que passa o agregado para `IN_PROGRESS` e registra `diagnostic.started.v1` ou `repair.started.v1`. Conclusões publicam os eventos `completed`; falhas podem produzir os eventos `failed` pelos serviços internos e pelo tratamento de erros de domínio dos comandos.
+
+| Estado do reparo ao consumir `repair.cancel.v1` | Resultado |
+| --- | --- |
+| `PENDING` | Passa para `CANCELLED` e publica `repair.cancelled.v1` |
+| `CANCELLED` | Confirma o cancelamento com `repair.cancelled.v1` |
+| `IN_PROGRESS` ou `FAILED` | Preserva o estado e publica `repair.cancellation-failed.v1`; exige intervenção manual |
+| `COMPLETED` | Preserva a conclusão e publica `repair.cancellation-failed.v1`; o reparo físico já realizado não é desfeito |
+| Inexistente | Publica `repair.cancellation-failed.v1` e rejeita o comando na Inbox |
+
+A compensação não desfaz automaticamente trabalho físico. A validação de `sagaId` impede aplicar um comando a agregado de outra Saga.
+
+## 7. Execução local e testes
+
+Pré-requisitos: Java 21, Docker com containers Linux e Docker Compose. O repositório inclui Maven Wrapper para Unix e Windows; `.env.example` não foi identificado.
+
+Configure as variáveis no ambiente ou em arquivo `.env` local, sem versionar credenciais:
+
+| Variáveis | Uso |
+| --- | --- |
+| `EXECUTION_JWT_ISSUER`, `EXECUTION_JWT_AUDIENCE`, `EXECUTION_JWT_JWKS_URI` | Obrigatórias no Compose; JWKS deve usar HTTPS |
+| `MONGO_HOST`, `MONGO_PORT`, `MONGO_DATABASE` | Endereço e banco; no Compose a aplicação usa `mongodb:27017` |
+| `MONGO_USERNAME`, `MONGO_PASSWORD`, `MONGO_AUTH_DATABASE` | Autenticação MongoDB; Compose fixa `admin` como banco de autenticação |
+| `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD`, `RABBITMQ_VHOST` | Conexão ao broker |
+| `EXECUTION_RABBITMQ_PORT`, `EXECUTION_RABBITMQ_MANAGEMENT_PORT` | Portas do broker opcional; padrões 5673 e 15673 |
+
+Suba aplicação, MongoDB e broker opcional:
 
 ```bash
+docker compose --profile local-broker up --build -d
+```
+
+Com broker externo configurado, use `docker compose up --build -d`. A aplicação fica em `http://localhost:8081`, mapeada à porta 8080 do container. O Compose usa `host.docker.internal:5673` como endereço padrão do broker; os serviços integrados precisam compartilhar broker e vhost.
+
+Para executar a aplicação no host, configure as variáveis JWT e a conexão ao broker (porta 5673 se usar o broker opcional), inicie o MongoDB e execute:
+
+```bash
+docker compose up -d --wait mongodb
 ./mvnw spring-boot:run
 ```
 
-No Windows PowerShell:
+Nesse modo a porta HTTP padrão é 8080. O Compose não configura o perfil `mtls` nem seu canal de autorização; iniciar a aplicação não torna as operações técnicas autorizadas.
 
-```powershell
-.\mvnw.cmd spring-boot:run
-```
-
-## Docker Compose
-
-O Compose sobe MongoDB autenticado em replica set de um membro (rs0), volume persistente e a aplicacao. A aplicacao fica exposta em `8081` para coexistir com o OS Service na porta `8080`.
-
-```bash
-docker compose up --build -d
-```
-
-URLs principais:
-
-- Health: `http://localhost:8081/actuator/health`
-- Liveness: `http://localhost:8081/actuator/health/liveness`
-- Readiness: `http://localhost:8081/actuator/health/readiness`
-- Swagger/OpenAPI e `/internal/bootstrap` permanecem bloqueados.
-
-## Seguranca
-
-A etapa 8.3.3 permite acesso sem JWT humano apenas aos GETs de probes, sem detalhes de componentes:
-
-- `/actuator/health`
-- `/actuator/health/liveness`
-- `/actuator/health/readiness`
-
-Operacoes tecnicas exigem Bearer JWT RS256 valido, ROLE_MECANICO e capacidade especifica na OS atribuida. Basic nao e aceito. O Execution resolve o osId do agregado e consulta uma porta de autorizacao. O perfil mtls usa o canal interno do OS com certificado de servico e JWT humano; sem o perfil/canal configurado, o adapter padrao bloqueia operacoes (503). CLIENTE, ATENDENTE e GERENTE nao recebem acesso tecnico pelo papel; demais rotas/metodos sao negados por padrao. RabbitMQ continua independente de JWT humano.
-
-Arquitetura, matriz completa, contrato proposto, limitacoes e evidencias: [autorizacao 8.3.3](docs/security/execution-authorization-8.3.3.md).
-
-## Testes e cobertura
-
-Executar a suite completa:
+Execute a suíte completa:
 
 ```bash
 ./mvnw clean verify
 ```
 
-No Windows PowerShell:
+No PowerShell, use `.\mvnw.cmd clean verify` ou `.\mvnw.cmd spring-boot:run`. **Docker precisa estar disponível para Testcontainers**: os testes de integração usam MongoDB 8.0 e RabbitMQ 4 reais. A suíte inclui domínio, casos de uso, persistência transacional, concorrência, HTTP/JWT, mensageria, Inbox/Outbox e retry/DLQ. O relatório é gerado em `target/site/jacoco/index.html`; esse arquivo gerado não é um link versionado.
 
-```powershell
-.\mvnw.cmd clean verify
+## 8. Qualidade e cobertura
+
+O [pom.xml](pom.xml) executa relatório e gate JaCoCo na fase `verify`: elemento `BUNDLE`, contador `LINE`, razão `COVEREDRATIO`, mínimo **0,80 (80%)**. A única exclusão configurada é `ExecutionApplication.class`.
+
+Cobertura SonarCloud informada para a análise de **13/11/2026: 89,4%**. Percentual e data foram fornecidos na solicitação desta documentação; não foi identificada evidência dessa análise nos arquivos do repositório. Projeto: [Execution no SonarCloud](https://sonarcloud.io/summary/new_code?id=AuroNet0_tech-challenge-oficina-execution-service).
+
+A imagem solicitada não foi identificada em `docs/img/sonarcloud.png`. A referência fica registrada como texto, sem criar um link relativo quebrado:
+
+```markdown
+![SonarCloud](docs/img/sonarcloud.png)
 ```
 
-Os testes usam Testcontainers com MongoDB para validar:
+## 9. CI/CD
 
-- Inicializacao do contexto Spring.
-- Conectividade e operacoes basicas com MongoDB.
-- Health checks, incluindo readiness com MongoDB.
-- Seguranca dos endpoints publicos e protegidos.
-- Disponibilidade da documentacao OpenAPI.
+O [workflow atual](.github/workflows/ci.yml) roda em pull requests e pushes para `main` e `homolog`, além de execução manual. Detalhes em [docs/ci.md](docs/ci.md).
 
-O relatorio JaCoCo e gerado em:
+O job `verify` executa testes dos scripts CI e [scripts/ci/verify.py](scripts/ci/verify.py): varredura básica de segredos, Java 21, `clean verify`, validação dos relatórios sem falhas/erros/testes ignorados e gate JaCoCo LINE de 80%. Constrói a imagem `linux/amd64`, verifica usuário não root, entrypoint, healthcheck e SIGTERM. O teste de runtime sobe MongoDB autenticado em replica set e RabbitMQ, verifica os três endpoints de health e a parada por SIGTERM; remove os recursos temporários ao final.
 
-```text
-target/site/jacoco/index.html
-```
+A análise SonarCloud usa o XML JaCoCo. A espera pelo **Quality Gate bloqueante ocorre somente em push na `main`** (`sonar.qualitygate.wait=true`); a análise também é executada nos demais gatilhos, e falhas do scanner ou ausência de token reprovam o job. Relatórios JSON sanitizados são coletados mesmo em falha e publicados com retenção de sete dias.
 
-A cobertura minima configurada e de 80% por linhas de codigo. A unica exclusao e a classe de bootstrap `ExecutionApplication`, que nao contem regra de negocio.
+O job `deploy` depende de `verify` e roda **somente em push na `main`**. Assume a role AWS por OIDC e consulta EKS/ECR no preflight: cluster ou repositório ausentes resultam em skip, permitindo o ambiente desligado; outros erros reprovam o job. Com o ambiente presente, usa a revisão `github.sha`, reutiliza sua imagem no ECR quando existente ou faz build/push com tag do SHA, sem sobrescrever deliberadamente a tag existente. A política de imutabilidade do ECR não é configurada neste workflow.
 
-## Dominio e estados
+O deploy resolve o digest, aplica `kubectl set image` ao Deployment/container e aguarda `kubectl rollout status` por até 300 segundos. Em falha, coleta descrição e logs e reprova; não há rollback automático nesse job.
 
-- Diagnostic nasce PENDING; start permite PENDING -> IN_PROGRESS; complete e fail permitem IN_PROGRESS -> COMPLETED ou FAILED. Cancelamento e permitido somente em PENDING ou IN_PROGRESS. FAILED preserva a falha e a justificativa, sem conversao implicita para CANCELLED. COMPLETED, CANCELLED e FAILED nao aceitam edicao.
-- Diagnostico concluido exige pelo menos um item valido. Itens so podem ser adicionados durante IN_PROGRESS; itemId deve ser unico apos strip. Quantidade deve ser positiva e precoPrevisto nao negativo. Descricao e identificador nao podem estar vazios. Nao ha calculo de orcamento.
-- Repair nasce PENDING quando repair.start.v1 autoriza e disponibiliza o trabalho. O inicio operacional REST autorizado aplica authorizeAndStart: PENDING -> IN_PROGRESS. complete e fail exigem IN_PROGRESS.
-- cancel confirma cancelamento apenas em PENDING. cancellationOutcome distingue CANCELLATION_ALLOWED (PENDING), CONFIRMED (CANCELLED), MANUAL_INTERVENTION_REQUIRED (IN_PROGRESS ou FAILED) e COMPENSATION_FAILED (COMPLETED), sem alterar o estado fisico. COMPLETED e CANCELLED sao terminais. A confirmacao de compensacao de trabalho iniciado depende de politica e evidencias futuras; nao e simulada nesta etapa.
-- Operacoes retornam novas instancias; o chamador deve utilizar o retorno, inclusive de save (que devolve a nova version). Os construtores validam snapshots para reconstituicao; os futuros casos de uso devem utilizar as operacoes de dominio para transicoes e validar a origem da autorizacao.
-- ExecutionHistory e imutavel e sua persistencia usa insert: salvar novamente o mesmo id falha, sem sobrescrever o registro. Referencias tecnicas sao opcionais para notas da OS; futuros casos de uso devem informa-las quando aplicaveis. Descricoes devem conter somente informacao tecnica necessaria, sem dados pessoais, credenciais ou outros dados sensiveis.
+| Secret/variável | Origem e finalidade |
+| --- | --- |
+| `SONAR_TOKEN` | Secret do GitHub Actions para a análise SonarCloud |
+| `AWS_ROLE_ARN` | Variável do GitHub Actions (`vars.AWS_ROLE_ARN`) para assumir a role de deploy |
+| `GITHUB_TOKEN` | Token fornecido pelo GitHub Actions e repassado ao scanner |
 
-## Colecoes e relacionamentos
+## 10. Implantação
 
-| Colecao | Conteudo | Indices adicionais |
-| --- | --- | --- |
-| diagnostics | id, osId, sagaId, status, observacoes, items embutidos, createdAt, updatedAt, completedAt, version | osId unico (unique_os); sagaId (saga) |
-| work_orders | id, osId, sagaId, diagnosticId, status, observacoes, startedAt, completedAt, createdAt, updatedAt, version | osId unico (unique_os); sagaId (saga) |
-| execution_history | id, osId, diagnosticId e repairId opcionais, eventType, description, createdAt, correlationId opcional | osId ASC + createdAt ASC (history_os_created) |
-| inbox_messages | eventId, envelope, contexto, status e timestamps | eventId como _id unico; osId + receivedAt |
-| outbox_events | evento, envelope, contexto, tentativas, lease e sequencia | eventId como _id unico; status + nextAttemptAt; status + lockedUntil; osId + sequence unico |
+O workflow configura deploy no EKS com estes valores; sua existência e disponibilidade no ambiente não são comprovadas pela leitura do arquivo:
 
-O id e persistido como _id, com indice unico nativo do MongoDB. UUIDs sao strings canonicas, inclusive nos relacionamentos; nao ha DBRef. Um diagnostico e um reparo por OS sao garantidos pelos indices unicos. Saga nao e unica. Historico e ordenado por createdAt crescente, usando id como desempate.
+| Item | Valor no repositório |
+| --- | --- |
+| Região AWS | `us-east-1` |
+| Cluster EKS | `tc-oficina-p4-demo-a` |
+| Namespace | `tc-oficina-p4-demo-a` |
+| Deployment | `execution-service` |
+| Container | `execution-service` |
+| Repositório ECR | `tc-oficina-p4-demo-a-execution` |
+| Referência implantada | Registro da conta AWS resolvida em runtime, repositório ECR e digest `sha256` |
+| Porta do container | `8080`, declarada no Dockerfile |
+| Health | `/actuator/health` |
+| Liveness | `/actuator/health/liveness` |
+| Readiness | `/actuator/health/readiness` |
 
-Os indices anotados sao efetivamente criados com spring.data.mongodb.auto-index-creation=true; os testes consultam seus metadados e exercitam violacoes de unicidade. MongoDB e o unico banco. A existencia da OS nao e consultada. O handler valida sagaId e diagnostico concluido/consistente antes de autorizar reparo; os repositorios nao simulam foreign keys.
+O [Dockerfile](Dockerfile) usa Java 21, usuário `app` e healthcheck de readiness na porta 8080. A configuração de health inclui MongoDB na readiness e apenas `livenessState` na liveness; RabbitMQ não integra o health. Os GETs de probes são públicos e não expõem detalhes de componentes.
 
-DiagnosticDocument e RepairDocument usam @Version Long, inicialmente null, para controle otimista. Atualizacoes com versao obsoleta lancam OptimisticLockingFailureException e nao sobrescrevem dados. Cada save e atomico apenas no proprio documento. Instantes produzidos pelas fabricas e transicoes usam precisao de milissegundos, compativel com BSON Date.
+Repositório de infraestrutura indicado na solicitação: [tech-challenge-oficina-k8s-infra](https://github.com/AuroNet0/tech-challenge-oficina-k8s-infra). A geração dos manifestos pelo stack `platform` e o estado efetivo do serviço no EKS são **não identificados neste repositório**; o CI pressupõe o Deployment já existente e atualiza sua imagem.
 
-## Compatibilidade com OS Service
+## 11. Estrutura do repositório
 
-Referencias consultadas na branch homolog:
+| Pasta/arquivo | Conteúdo relevante |
+| --- | --- |
+| [src/main](src/main) | Aplicação Java e configuração Spring |
+| [src/test](src/test) | Testes unitários, integração e fixtures JWT |
+| [docs](docs) | Mensageria, CI, fila operacional e autorização |
+| [docker](docker) | `mongo-entrypoint.sh` gera a chave interna e inicia `mongod` com `rs0`; `mongo-healthcheck.js` inicializa o replica set quando necessário e verifica o primário |
+| [scripts/ci](scripts/ci) | Verificador, testes dos scripts, validador YAML e Compose isolado de runtime |
+| [.github/workflows](.github/workflows) | Workflow de verificação e deploy |
+| [.mvn](.mvn) | Configuração do Maven Wrapper |
+| [compose.yaml](compose.yaml) | Aplicação, MongoDB e perfil opcional RabbitMQ |
 
-- [docs/events.md](https://github.com/AuroNet0/tech-challenge-oficina-os-service/blob/homolog/docs/events.md)
-- [docs/saga.md](https://github.com/AuroNet0/tech-challenge-oficina-os-service/blob/homolog/docs/saga.md)
+Os dois arquivos de `docker/` são montados pelo Compose local e por `scripts/ci/compose.yaml`. Seu uso pelo ambiente de teste do Billing, mencionado na solicitação, é **não identificado neste repositório**; os testes Java daqui usam `MongoDBContainer`.
 
-Os nomes itemId, descricao, tipo, quantidade, unidadePreco e precoPrevisto correspondem ao contrato diagnostic.completed.v1. Tipos e unidades preservam SERVICO/PECA/MATERIAL e UNIDADE/HORA/KIT. No dominio, numeros sao BigDecimal; no documento, quantidade e precoPrevisto sao strings decimais produzidas por toPlainString, preservando precisao e escala sem limitar valores a Decimal128. precoPrevisto e estimativa unitaria para o Billing futuro.
+## Conferência documental
 
-O mapper de mensagens emite quantidade e precoPrevisto como strings decimais, preserva osId, sagaId e correlationId e monta o envelope documentado pelo OS Service. Falhas e cancelamentos seguem a distincao entre repair.failed.v1, repair.cancelled.v1 e repair.cancellation-failed.v1. A Outbox armazena o envelope completo, com eventId proprio e estavel entre tentativas.
+### Afirmações não confirmadas
 
-## Atomicidade e limites
+- Valores de issuer, audience, JWKS e credenciais por ambiente: não identificados; dependem de configuração externa.
+- Migrações versionadas: não identificadas.
+- Cobertura SonarCloud de 89,4% em 13/11/2026: dado fornecido na solicitação, sem evidência local identificada; imagem `docs/img/sonarcloud.png` ausente.
+- Geração dos manifestos pelo stack `platform` da infraestrutura e serviço efetivamente rodando no EKS: não identificados; o workflow comprova apenas a configuração do deploy.
+- Política de imutabilidade das tags no ECR: não identificada; o workflow utiliza SHA e reutiliza a tag existente.
+- Uso dos scripts `docker/` no ambiente de teste do Billing: não identificado nos arquivos locais.
 
-MongoTransactionManager esta configurado. Os casos de uso de escrita usam @Transactional: alteracao de Diagnostic ou Repair e insercao de ExecutionHistory confirmam ou revertem juntos. Falhas de historico nao deixam o estado tecnico atualizado. Versoes obsoletas e conflitos de escrita de transacoes retornam HTTP 409, sem retry automatico. O cliente deve consultar novamente antes de decidir como reaplicar sua alteracao.
+### Divergências entre documentação anterior e código
 
-O consumidor inclui Inbox e Outbox na mesma transacao do estado tecnico e historico. As conclusoes REST incluem a Outbox na transacao. A publicacao RabbitMQ ocorre posteriormente, sem transacao MongoDB aberta durante o confirm. O historico tecnico nao coordena a Saga.
+- README citava disponibilidade do OpenAPI; configuração, segurança e teste confirmam documentação desabilitada e acesso negado.
+- `docs/ci.md` dizia que não havia publicação de imagens ou deploy e limitava gatilhos a `homolog`; o workflow inclui `main`, SonarCloud e deploy EKS/ECR.
+- `docs/messaging.md` dizia que não existiam endpoints de início e atribuía ao consumidor o início do reparo; controllers e casos de uso implementam início REST, enquanto comandos criam `PENDING`. O trecho foi corrigido.
+- README listava `infrastructure/observability` e três portas de repositório; a árvore atual não contém esse pacote e tem cinco portas de repositório, além das demais portas de saída.
+- O documento de segurança registra a etapa histórica 8.3.3, anterior à fila e ao adapter do perfil `mtls`; recebeu nota para distinguir esse registro do comportamento atual.
+- Percentuais e quantidades de testes nos docs antigos são evidências datadas de execuções anteriores, não medições atuais nem a cobertura informada do SonarCloud.
 
-Testcontainers usa MongoDB 8 em replica set e valida rollback real entre diagnostics e execution_history, alem de persistencia, precisao decimal, reconstrucao, indices, ordenacao, unicidade e concorrencia otimista. Os testes de bootstrap permanecem preservados.
+### Links relativos e referências corrigidos
 
-O script docker/mongo-entrypoint.sh gera uma chave interna em /data/db/.replica-keyfile somente quando ausente, com permissao 400 e proprietario mongodb. O healthcheck autentica, inicia rs0 somente se ainda nao inicializado e aguarda isWritablePrimary antes de liberar a aplicacao. Reutiliza o volume anterior sem apagar os dados. As credenciais de volumes existentes devem continuar correspondendo as variaveis configuradas.
-
-O membro anuncia mongodb:27017. A URI usa replicaSet=rs0 e directConnection=true para funcionar tanto no Compose quanto com a aplicacao executada no host via porta publicada. Esse replica set de um membro e destinado ao desenvolvimento, sem alta disponibilidade. Arquivos shell sao versionados com LF para funcionar tambem em checkouts Windows.
-
-Nao foram implementados outro orquestrador de Saga, Billing, pagamentos, infraestrutura cloud ou alteracao direta de status da OS. Nao ha dados ficticios permanentes. JWT e politica HTTP foram acrescentados na etapa 8.3.3; a fila reutiliza a autorizacao distribuida atual com OS.
-
-## API REST tecnica
-
-Todos os endpoints abaixo exigem JWT RS256, papel MECANICO e autorizacao atual da OS para a capacidade solicitada. As respostas de sucesso dependem dessa decisao e da configuracao do canal mtls existente. Os exemplos Bearer ilustram o contrato HTTP, sem ativar a integracao OS nem contornar a autorizacao.
-
-| Metodo | Endpoint | Operacao |
-| --- | --- | --- |
-| GET | /api/v1/diagnosticos/{id} | Consultar diagnostico por UUID |
-| GET | /api/v1/diagnosticos?osId={uuid} | Consultar unico diagnostico da OS |
-| POST | /api/v1/diagnosticos/{id}/itens | Adicionar item em IN_PROGRESS |
-| PATCH | /api/v1/diagnosticos/{id}/observacoes | Atualizar observacoes em PENDING ou IN_PROGRESS |
-| POST | /api/v1/diagnosticos/{id}/conclusao | Concluir IN_PROGRESS com itens validos |
-| GET | /api/v1/reparos/{id} | Consultar reparo por UUID |
-| GET | /api/v1/reparos?osId={uuid} | Consultar unico reparo da OS |
-| PATCH | /api/v1/reparos/{id}/observacoes | Atualizar observacoes em PENDING ou IN_PROGRESS |
-| POST | /api/v1/reparos/{id}/conclusao | Concluir somente IN_PROGRESS |
-| GET | /api/v1/execucoes/historico?osId={uuid} | Historico cronologico, ou lista vazia |
-| GET | /api/v1/execucoes/fila | Pendencias autorizadas, mais antigas primeiro |
-| POST | /api/v1/diagnosticos/{id}/inicio | Iniciar diagnostico PENDING (DIAGNOSTIC_WRITE) |
-| POST | /api/v1/reparos/{id}/inicio | Iniciar reparo PENDING (REPAIR_WRITE) |
-
-Consultas de agregado retornam um objeto e HTTP 404 quando ausente, inclusive busca por osId. Alteracoes bem-sucedidas retornam HTTP 200 e o agregado atualizado, incluindo version. Historico retorna uma lista. Campos de resposta incluem os identificadores, estado, observacoes e timestamps; itens retornam quantidade e precoPrevisto como strings decimais, sem arredondamento.
-
-A API opera somente sobre agregados existentes. A criacao depende de diagnostic.start.v1 e repair.start.v1; o inicio operacional exige os endpoints /inicio, sem corpo ou usuarioId. Nao existem endpoints de criacao, autorizacao do OS, cancelamento ou alteracao generica de status. PENDING nao pode ser concluido. O perfil mtls reutiliza o canal de autorizacao atual do OS; sem esse canal o adapter padrao retorna 503.
-
-### Adicionar item
-
-Exemplo (substitua ID e TOKEN pelo JWT valido do Auth, sem registrar o token):
-
-```bash
-curl -H "Authorization: Bearer TOKEN" -X POST \
-  "http://localhost:8081/api/v1/diagnosticos/ID/itens" \
-  -H "Content-Type: application/json" \
-  -H "X-Correlation-Id: 00000000-0000-0000-0000-000000000001" \
-  -d '{"itemId":"item-001","descricao":"Troca de pastilhas de freio","tipo":"PECA","quantidade":"2","unidadePreco":"UNIDADE","precoPrevisto":"150.00"}'
-```
-
-Quantidade e preco sao strings decimais sem notacao exponencial: quantidade positiva e preco nao negativo. Ambos sao convertidos para BigDecimal, sem calculo de orcamento. itemId duplicado apos normalizacao retorna 409; dados obrigatorios ausentes ou invalidos retornam 400.
-
-### Atualizar observacoes e concluir
-
-```bash
-curl -H "Authorization: Bearer TOKEN" -X PATCH \
-  "http://localhost:8081/api/v1/reparos/ID/observacoes" \
-  -H "Content-Type: application/json" \
-  -d '{"observacoes":"Teste tecnico realizado"}'
-
-curl -H "Authorization: Bearer TOKEN" -X POST \
-  "http://localhost:8081/api/v1/reparos/ID/conclusao"
-```
-
-observacoes deve estar presente e nao ser null; string vazia permite limpar o texto. O mesmo formato atende diagnosticos.
-
-X-Correlation-Id e opcional nas alteracoes e deve ser UUID quando informado; e preservado no historico. Nas conclusoes, sua ausencia recupera a correlacao do ultimo comando processado da OS. Cada alteracao bem-sucedida registra referencias tecnicas, descricao, createdAt e eventType (diagnostic.item-added, diagnostic.observations-updated, diagnostic.completed.v1, repair.observations-updated ou repair.completed.v1). O texto livre de observacoes nao e duplicado no historico.
-
-Concluir diagnostico ou reparo salva o estado, historico e diagnostic.completed.v1 ou repair.completed.v1 na Outbox atomicamente. O worker publica esses eventos para a Saga do OS Service. Falha de Outbox causa rollback da conclusao; indisponibilidade do broker nao impede o commit local. A entrega e at-least-once e o OS Service deduplica pelo eventId.
-
-### Erros
-
-Erros de aplicacao usam application/problem+json (ProblemDetail), por exemplo:
-
-```json
-{
-  "type": "about:blank",
-  "title": "Conflict",
-  "status": 409,
-  "detail": "Invalid repair transition"
-}
-```
-
-- 400: UUID, enum, JSON ou campos invalidos.
-- 401: autenticacao ausente ou invalida, tratada pelo Spring Security.
-- 403: papel, escopo/capacidade ou rota/metodo nao autorizado.
-- 404: agregado ou rota inexistente.
-- 409: regra de dominio, item duplicado, chave unica ou concorrencia.
-- 500: falha inesperada, com mensagem generica sem detalhes internos.
-- 503: canal de autorizacao operacional ausente/indisponivel; nenhuma mutacao.
-
-### Validacao e relatorios
-
-```bash
-./mvnw clean verify
-docker compose config --quiet
-docker compose up --build -d
-docker compose ps
-docker compose exec execution-service curl -fsS http://localhost:8080/actuator/health/readiness
-```
-
-Para iniciar apenas o MongoDB transacional: docker compose up -d --wait mongodb; depois execute ./mvnw spring-boot:run no host.
-
-Os testes usam Testcontainers MongoDB 8 em replica set e nao dependem do MongoDB do Compose. Incluem HTTP autenticado, validacao de entrada, ausencia de rotas de autorizacao, precisao decimal, persistencia e historico, rollback apos falha de insercao do historico e duas alteracoes HTTP concorrentes (uma confirma e outra retorna 409).
-
-clean verify gera target/site/jacoco/index.html (abrir no navegador) e target/site/jacoco/jacoco.xml, verificando minimo de 80% de linhas. Os resultados individuais ficam em target/surefire-reports.
+- Removida de `docs/security/execution-authorization-8.3.3.md` a referência ao roteiro removido `integration/README.md`; a descrição histórica ficou sem link.
+- Os links relativos ativos deste README e dos documentos alterados foram conferidos contra arquivos ou diretórios existentes. A referência à imagem ausente foi mantida somente em bloco de código.
