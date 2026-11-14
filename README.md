@@ -192,12 +192,6 @@ O [pom.xml](pom.xml) executa relatório e gate JaCoCo na fase `verify`: elemento
 
 Cobertura SonarCloud informada para a análise de **13/11/2026: 89,4%**. Percentual e data foram fornecidos na solicitação desta documentação; não foi identificada evidência dessa análise nos arquivos do repositório. Projeto: [Execution no SonarCloud](https://sonarcloud.io/summary/new_code?id=AuroNet0_tech-challenge-oficina-execution-service).
 
-A imagem solicitada não foi identificada em `docs/img/sonarcloud.png`. A referência fica registrada como texto, sem criar um link relativo quebrado:
-
-```markdown
-![SonarCloud](docs/img/sonarcloud.png)
-```
-
 ## 9. CI/CD
 
 O [workflow atual](.github/workflows/ci.yml) roda em pull requests e pushes para `main` e `homolog`, além de execução manual. Detalhes em [docs/ci.md](docs/ci.md).
