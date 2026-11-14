@@ -1,0 +1,211 @@
+# Manifestos de referência do execution-service.
+# Espelham o que o stack platform do repositório tech-challenge-oficina-k8s-infra aplica no EKS.
+# Os valores entre <...> são fornecidos pela infraestrutura em cada ambiente (RDS, JWT, conta AWS).
+# Segredos (TLS, banco, RabbitMQ) são referenciados por nome e NÃO ficam neste repositório.
+# O CI deste repositório atualiza somente a imagem do Deployment (kubectl set image).
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: execution-service
+  namespace: tc-oficina-p4-demo-a
+  labels:
+    app.kubernetes.io/part-of: oficina-phase4
+    oficina/environment: demo-a
+    oficina/managed-by: platform
+automountServiceAccountToken: false
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: execution-service-config
+  namespace: tc-oficina-p4-demo-a
+  labels:
+    app.kubernetes.io/part-of: oficina-phase4
+    oficina/environment: demo-a
+    oficina/managed-by: platform
+data:
+  SPRING_PROFILES_ACTIVE: mtls
+  SERVER_ADDRESS: 0.0.0.0
+  SERVER_PORT: '8443'
+  SERVER_SSL_ENABLED: 'true'
+  SERVER_SSL_KEY_STORE: file:/tls/identity.p12
+  SERVER_SSL_KEY_STORE_TYPE: PKCS12
+  SERVER_SSL_TRUST_STORE: file:/tls/inbound-truststore.p12
+  SERVER_SSL_TRUST_STORE_TYPE: PKCS12
+  SERVER_SSL_CLIENT_AUTH: want
+  SPRING_RABBITMQ_HOST: rabbitmq
+  SPRING_RABBITMQ_PORT: '5672'
+  SPRING_RABBITMQ_VIRTUAL_HOST: /oficina
+  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: '3'
+  SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: '0'
+  SPRING_JPA_HIBERNATE_DDL_AUTO: validate
+  SPRING_FLYWAY_ENABLED: 'true'
+  NEW_RELIC_APP_NAME: tc-oficina-p4-demo-a-execution-service
+  NEW_RELIC_DISTRIBUTED_TRACING_ENABLED: 'true'
+  OFICINA_INTERNAL_AUTH_URI: https://auth-internal.tc-oficina-p4-demo-a.svc.cluster.local:8443/internal/v1/identity/client-access/check
+  OFICINA_INTERNAL_OS_URI: https://os-service.tc-oficina-p4-demo-a.svc.cluster.local:8443/internal/technical-authorization
+  EXECUTION_JWT_ISSUER: <VALOR_FORNECIDO_PELA_INFRA>
+  EXECUTION_JWT_AUDIENCE: <VALOR_FORNECIDO_PELA_INFRA>
+  EXECUTION_JWT_JWKS_URI: <VALOR_FORNECIDO_PELA_INFRA>
+  MONGO_HOST: mongodb-0.mongodb.tc-oficina-p4-demo-a.svc.cluster.local
+  MONGO_PORT: '27017'
+  MONGO_DATABASE: oficina_execution
+  MONGO_AUTH_DATABASE: oficina_execution
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: execution-service
+  namespace: tc-oficina-p4-demo-a
+  labels:
+    app.kubernetes.io/part-of: oficina-phase4
+    oficina/environment: demo-a
+    oficina/managed-by: platform
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: execution-service
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+      appProtocol: https
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: execution-service
+  namespace: tc-oficina-p4-demo-a
+  labels:
+    app.kubernetes.io/part-of: oficina-phase4
+    oficina/environment: demo-a
+    oficina/managed-by: platform
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: execution-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: oficina-phase4
+        oficina/environment: demo-a
+        oficina/managed-by: platform
+        app.kubernetes.io/name: execution-service
+        oficina/role: business
+    spec:
+      serviceAccountName: execution-service
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: execution-service
+          image: <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/tc-oficina-p4-demo-a-execution:<TAG_OU_DIGEST>
+          imagePullPolicy: IfNotPresent
+          command:
+            - java
+            - -Xmx384m
+            - -XX:ActiveProcessorCount=2
+            - '@/tls/java-options'
+            - -jar
+            - /app/app.jar
+          ports:
+            - name: https
+              containerPort: 8443
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 768Mi
+          envFrom:
+            - configMapRef:
+                name: execution-service-config
+          env:
+            - name: SERVER_SSL_KEY_STORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: execution-service-tls
+                  key: password
+            - name: SERVER_SSL_TRUST_STORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: execution-service-tls
+                  key: password
+            - name: SPRING_RABBITMQ_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: execution-service-rabbitmq
+                  key: username
+            - name: SPRING_RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: execution-service-rabbitmq
+                  key: password
+            - name: MONGO_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: execution-mongodb
+                  key: username
+            - name: MONGO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: execution-mongodb
+                  key: password
+          startupProbe:
+            httpGet:
+              scheme: HTTPS
+              port: https
+              path: /actuator/health/liveness
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              scheme: HTTPS
+              port: https
+              path: /actuator/health/liveness
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 4
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              port: https
+              path: /actuator/health/readiness
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tls
+          secret:
+            secretName: execution-service-tls
+            defaultMode: 288
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

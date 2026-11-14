@@ -221,9 +221,11 @@ O workflow configura deploy no EKS com estes valores; sua existência e disponib
 | Liveness | `/actuator/health/liveness` |
 | Readiness | `/actuator/health/readiness` |
 
+A pasta `k8s/` contém [k8s/execution-service.yaml](k8s/execution-service.yaml), com manifestos de referência (ServiceAccount, ConfigMap, Service e Deployment) que espelham o que o stack `platform` do repositório `tech-challenge-oficina-k8s-infra` aplica no EKS. Os valores entre `<...>` (issuer, audience, JWKS, conta AWS e tag da imagem) são fornecidos pela infraestrutura em cada ambiente; segredos de TLS, MongoDB e RabbitMQ são referenciados por nome e não ficam no repositório. O arquivo não é aplicado diretamente por este repositório: o Deploy da infraestrutura provisiona e aplica os recursos no cluster, enquanto o job `deploy` do `ci.yml` apenas atualiza a imagem do Deployment com `kubectl set image`.
+
 O [Dockerfile](Dockerfile) usa Java 21, usuário `app` e healthcheck de readiness na porta 8080. A configuração de health inclui MongoDB na readiness e apenas `livenessState` na liveness; RabbitMQ não integra o health. Os GETs de probes são públicos e não expõem detalhes de componentes.
 
-Repositório de infraestrutura indicado na solicitação: [tech-challenge-oficina-k8s-infra](https://github.com/AuroNet0/tech-challenge-oficina-k8s-infra). A geração dos manifestos pelo stack `platform` e o estado efetivo do serviço no EKS são **não identificados neste repositório**; o CI pressupõe o Deployment já existente e atualiza sua imagem.
+Repositório de infraestrutura: [tech-challenge-oficina-k8s-infra](https://github.com/AuroNet0/tech-challenge-oficina-k8s-infra). O estado efetivo do serviço no EKS é **não identificado neste repositório**; o CI pressupõe o Deployment já existente e atualiza sua imagem.
 
 ## 11. Estrutura do repositório
 
@@ -232,6 +234,7 @@ Repositório de infraestrutura indicado na solicitação: [tech-challenge-oficin
 | [src/main](src/main) | Aplicação Java e configuração Spring |
 | [src/test](src/test) | Testes unitários, integração e fixtures JWT |
 | [docs](docs) | Mensageria, CI, fila operacional e autorização |
+| `k8s` | Manifestos Kubernetes de referência do serviço |
 | [docker](docker) | `mongo-entrypoint.sh` gera a chave interna e inicia `mongod` com `rs0`; `mongo-healthcheck.js` inicializa o replica set quando necessário e verifica o primário |
 | [scripts/ci](scripts/ci) | Verificador, testes dos scripts, validador YAML e Compose isolado de runtime |
 | [.github/workflows](.github/workflows) | Workflow de verificação e deploy |
@@ -247,7 +250,7 @@ Os dois arquivos de `docker/` são montados pelo Compose local e por `scripts/ci
 - Valores de issuer, audience, JWKS e credenciais por ambiente: não identificados; dependem de configuração externa.
 - Migrações versionadas: não identificadas.
 - Cobertura SonarCloud de 89,4% em 13/11/2026: dado fornecido na solicitação, sem evidência local identificada; imagem `docs/img/sonarcloud.png` ausente.
-- Geração dos manifestos pelo stack `platform` da infraestrutura e serviço efetivamente rodando no EKS: não identificados; o workflow comprova apenas a configuração do deploy.
+- Serviço efetivamente rodando no EKS: não identificado; o workflow e os manifestos de referência documentam a configuração do deploy.
 - Política de imutabilidade das tags no ECR: não identificada; o workflow utiliza SHA e reutiliza a tag existente.
 - Uso dos scripts `docker/` no ambiente de teste do Billing: não identificado nos arquivos locais.
 
